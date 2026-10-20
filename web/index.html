@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cadet</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b0e17'/%3E%3Cpath d='M16 5c4 4 5 9 4 15h-8c-1-6 0-11 4-15z' fill='%23e6e9f2'/%3E%3Ccircle cx='16' cy='13' r='2' fill='%234c8dff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/vendor/xterm.css">
+<style>
+:root {
+  --bg: #0b0e17; --surface: #111522; --raised: #171c2d; --line: #232a40; --line-2: #2f3856;
+  --text: #e6e9f2; --muted: #8791ae; --faint: #5a6482;
+  --accent: #4c8dff; --accent-ink: #fff; --ok: #3ecf8e; --warn: #f5a524; --bad: #f0566a;
+  --radius: 10px;
+  --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); display: flex; flex-direction: column; -webkit-font-smoothing: antialiased; }
+#stars { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+button, input, select, textarea { font: inherit; color: inherit; }
+svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+header { position: relative; z-index: 1; display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 20px; border-bottom: 1px solid var(--line); background: rgba(11,14,23,.85); backdrop-filter: blur(10px); }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 650; letter-spacing: .01em; }
+.brand .mark { width: 24px; height: 24px; border-radius: 7px; background: var(--raised); border: 1px solid var(--line-2); display: grid; place-items: center; color: var(--accent); }
+.brand small { color: var(--faint); font-weight: 500; }
+.spacer { flex: 1; }
+.pill { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); font-size: 12px; background: var(--surface); }
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--bad); }
+.pill.on i { background: var(--ok); }
+.pill[hidden] { display: none; }
+.pill.warn { color: var(--warn); border-color: rgba(245,165,36,.4); }
+
+.btn { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--raised); cursor: pointer; font-weight: 500; font-size: 13px; transition: border-color .15s, background .15s; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { filter: brightness(1.1); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.btn.ghost:hover { color: var(--text); background: var(--raised); }
+.btn.icon { width: 30px; height: 30px; padding: 0; justify-content: center; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .row:focus-visible, .rk:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+main { position: relative; z-index: 1; flex: 1; min-height: 0; display: grid; grid-template-columns: 320px 1fr; }
+aside { border-right: 1px solid var(--line); background: rgba(17,21,34,.8); display: flex; flex-direction: column; min-height: 0; }
+.group { padding: 16px; border-bottom: 1px solid var(--line); }
+.group.grow { flex: 1; min-height: 0; overflow: auto; border-bottom: 0; }
+.label { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+
+.fleet { margin-bottom: 12px; }
+.fleet:last-child { margin-bottom: 0; }
+.fleet .fn { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 8px; }
+.fleet .sw { width: 8px; height: 8px; border-radius: 2px; }
+.docks { display: flex; flex-wrap: wrap; gap: 6px; }
+.docks .btn { height: 30px; text-transform: capitalize; }
+
+.row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); cursor: pointer; }
+.row:hover { border-color: var(--line-2); }
+.row.sel { border-color: var(--accent); background: rgba(76,141,255,.08); }
+.row .tx { flex: 1; min-width: 0; }
+.row .t { font-weight: 550; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.row .s { color: var(--faint); font-size: 12px; margin-top: 2px; }
+.row .acts { display: none; gap: 2px; }
+.row:hover .acts, .row:focus-within .acts { display: flex; }
+.row .hot { color: var(--warn); }
+.add { display: flex; gap: 6px; margin-top: 10px; }
+.add input { flex: 1; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--bg); }
+
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 550; padding: 2px 9px; border-radius: 99px; border: 1px solid var(--line-2); color: var(--muted); font-family: var(--sans); }
+.badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge.underway { color: var(--ok); border-color: rgba(62,207,142,.35); }
+.badge.underway::before { animation: pulse 1.6s infinite; }
+.badge.needs_you { color: var(--warn); border-color: rgba(245,165,36,.45); }
+.stage { position: relative; min-height: 0; overflow: hidden; }
+.stage .head { position: absolute; z-index: 2; top: 22px; left: 28px; pointer-events: none; text-shadow: 0 1px 8px #000; }
+.stage h2 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -.01em; }
+.stage .sub { color: var(--muted); margin: 2px 0 0; }
+#field { position: absolute; inset: 0; }
+.void { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; color: var(--muted); pointer-events: none; }
+.void b { color: var(--text); font-size: 15px; margin-bottom: 4px; }
+.rk { position: absolute; width: 160px; transform: translate(-50%, -50%); text-align: center; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
+  transition: left .8s cubic-bezier(.4,0,.2,1), top .8s cubic-bezier(.4,0,.2,1), opacity .7s, transform .9s cubic-bezier(.5,0,.8,.4); animation: arrive .9s cubic-bezier(.2,.7,.2,1) both; }
+.rk.drag { transition: none; cursor: grabbing; z-index: 5; }
+.rk.leaving { opacity: 0; transform: translate(calc(-50% + 220px), -50%); pointer-events: none; }
+.rk .bob { position: relative; animation: bob 4.6s ease-in-out infinite; animation-delay: var(--d, 0s); }
+.rk svg { display: block; width: 120px; height: 48px; margin: 0 auto; overflow: visible; filter: drop-shadow(0 4px 10px rgba(0,0,0,.45)); }
+.rk .flame { transform-box: fill-box; transform-origin: 100% 50%; animation: flicker .24s ease-in-out infinite alternate; }
+.rk[data-st=anchored] .flame, .rk[data-st=sailing_off] .flame { display: none; }
+.rk[data-st=anchored] .bob { animation: tumble 11s ease-in-out infinite; filter: grayscale(.9) brightness(.6); }
+.rk .ring { position: absolute; left: 50%; top: 24px; width: 120px; height: 120px; margin: -60px 0 0 -60px; border: 2px solid var(--warn); border-radius: 50%; opacity: 0; display: none; }
+.rk[data-st=needs_you] .ring { display: block; animation: ping 1.9s ease-out infinite; }
+.rk .lbl { margin-top: 10px; text-shadow: 0 1px 8px #000, 0 0 2px #000; }
+.rk .nm { font-weight: 600; font-size: 13px; }
+.rk .meta, .rk .task { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rk .task { color: var(--faint); }
+.rk .st { display: inline-flex; align-items: center; gap: 5px; margin-top: 5px; font-size: 11px; font-weight: 600; color: var(--muted); }
+.rk .st::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.rk[data-st=underway] .st { color: var(--ok); }
+.rk[data-st=underway] .st::before { animation: pulse 1.6s infinite; }
+.rk[data-st=needs_you] .st { color: var(--warn); }
+.rk .x { position: absolute; top: -6px; right: 6px; width: 22px; height: 22px; }
+@keyframes bob { 0%, 100% { transform: translateY(-5px); } 50% { transform: translateY(5px); } }
+@keyframes tumble { 0%, 100% { transform: rotate(-7deg); } 50% { transform: rotate(9deg) translateY(4px); } }
+@keyframes flicker { from { transform: scaleX(.78); opacity: .85; } to { transform: scaleX(1.18); opacity: 1; } }
+@keyframes ping { 0% { transform: scale(.5); opacity: .7; } 100% { transform: scale(1.25); opacity: 0; } }
+@keyframes arrive { from { opacity: 0; transform: translate(calc(-50% - 140px), -50%); } to { opacity: 1; transform: translate(-50%, -50%); } }
+.empty { border: 1px dashed var(--line-2); border-radius: 12px; padding: 48px 20px; text-align: center; color: var(--muted); }
+.empty b { display: block; color: var(--text); margin-bottom: 4px; font-size: 15px; }
+.hint { color: var(--faint); font-size: 13px; }
+@keyframes pulse { 50% { opacity: .3; } }
+
+dialog { max-height: 92vh; overflow: auto; border: 1px solid var(--line-2); border-radius: 14px; padding: 0; background: var(--surface); color: var(--text); width: min(480px, 94vw); box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+dialog::backdrop { background: rgba(4,6,12,.7); backdrop-filter: blur(2px); }
+.dh { padding: 18px 20px 4px; font-size: 16px; font-weight: 650; }
+.dh small { display: block; color: var(--muted); font-weight: 400; font-size: 13px; margin-top: 2px; }
+.db { padding: 8px 20px 4px; }
+.db label { display: block; margin: 14px 0 6px; font-size: 12px; font-weight: 550; color: var(--muted); }
+.db select, .db textarea, .db input { width: 100%; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg); padding: 8px 10px; }
+.db textarea { min-height: 96px; resize: vertical; }
+.colabel { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
+.colabel label { margin: 14px 0 6px; }
+.colabel .btn { height: 24px; padding: 0 8px; font-size: 12px; color: var(--accent); }
+#coBox { margin-top: 8px; padding: 8px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--raised); }
+.cohead { display: flex; align-items: center; gap: 8px; }
+.cohead code { flex: 1; min-width: 0; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#coList { max-height: 200px; overflow: auto; margin: 8px 0 4px; }
+.co { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
+.co:hover { background: var(--surface); }
+.co .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.co .tag { font-size: 10px; font-weight: 600; letter-spacing: .04em; color: var(--ok); border: 1px solid rgba(62,207,142,.35); border-radius: 99px; padding: 0 6px; }
+.co .in { font-size: 11px; color: var(--faint); }
+.co .btn { height: 22px; padding: 0 8px; font-size: 12px; }
+#coMsg { min-height: 1.2em; }
+.srcrow { display: flex; align-items: center; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+.srcrow .hint { flex: 1; font-size: 12px; }
+#srcBox { margin-top: 4px; padding: 0 12px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--raised); }
+.df { display: flex; align-items: center; gap: 8px; justify-content: flex-end; padding: 16px 20px 18px; }
+.df .err { flex: 1; color: var(--bad); font-size: 12px; }
+
+#bridge { position: fixed; z-index: 20; top: 0; right: 0; bottom: 0; width: min(860px, 100vw); background: var(--bg); border-left: 1px solid var(--line-2); box-shadow: -24px 0 60px rgba(0,0,0,.5); transform: translateX(100%); transition: transform .22s ease; display: flex; flex-direction: column; }
+#bridge.open { transform: none; }
+#bridge .bh { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+#bridge .bh b { font-weight: 600; }
+#bridge .bh .m { color: var(--muted); font-size: 12px; flex: 1; }
+#term { flex: 1; min-height: 0; padding: 10px 8px 6px 14px; }
+
+@media (max-width: 860px) { main { grid-template-columns: 1fr; overflow: auto; } aside { border-right: 0; border-bottom: 1px solid var(--line); } .stage { min-height: 70vh; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } .rk { opacity: 1; } }
+</style>
+</head>
+<body>
+<canvas id="stars"></canvas>
+<header>
+  <div class="brand"><span class="mark"><svg class="i" viewBox="0 0 24 24"><path d="M12 3c3.5 3.2 4.6 7.5 3.6 13H8.4C7.4 10.5 8.5 6.2 12 3z"/><path d="M8.4 14 5 17.5M15.6 14l3.4 3.5"/></svg></span>Cadet <small>on Admiral</small></div>
+  <div class="spacer"></div>
+  <span class="pill" id="attn" hidden></span>
+  <span class="pill" id="conn"><i></i><span>Connecting</span></span>
+  <button class="btn" id="setupBtn"><svg class="i" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.6a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2 1.2l.4 2.6h4l.4-2.6a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg>Set up fleets</button>
+</header>
+<main>
+  <aside>
+    <div class="group">
+      <div class="label">Launch from</div>
+      <div id="fleets"></div>
+    </div>
+    <div class="group grow">
+      <div class="label">Orders <span id="oc"></span></div>
+      <div id="orders"></div>
+      <form class="add" id="addForm"><input id="newOrder" placeholder="Add an order" autocomplete="off" aria-label="New order"><button class="btn icon" title="Add order" aria-label="Add order"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></form>
+    </div>
+  </aside>
+  <div class="stage">
+    <div class="head"><h2>Fleet in orbit</h2><p class="sub" id="sub"></p></div>
+    <div id="field"></div>
+    <div class="void" id="void"><div><b>Quiet skies</b>Choose a fleet and harness on the left to launch a rocket.</div></div>
+  </div>
+</main>
+
+<dialog id="launch">
+  <div class="dh" id="lTitle">Launch<small id="lSub"></small></div>
+  <div class="db">
+    <label for="lOrder">Order</label>
+    <select id="lOrder"></select>
+    <div id="srcBox" hidden>
+      <label for="srcPlugin">New order source</label>
+      <select id="srcPlugin"></select>
+      <input id="srcName" placeholder="Name (optional)" style="margin-top:8px" autocomplete="off">
+      <div class="srcrow"><span class="hint" id="srcHint"></span><button class="btn" id="srcCancel" type="button">Cancel</button><button class="btn primary" id="srcAdd" type="button">Add source</button></div>
+    </div>
+    <textarea id="lText" placeholder="What should the agent work on?" style="margin-top:8px"></textarea>
+    <label for="lNote" id="lNoteL">Note (sent before the order)</label>
+    <input id="lNote" placeholder="Optional">
+    <label for="lSkill">Skill</label>
+    <select id="lSkill"></select>
+    <div class="colabel"><label for="lDir">Checkout</label><button class="btn ghost" id="coOpen" type="button">+ Add checkout</button></div>
+    <select id="lDir"></select>
+    <div id="coBox" hidden>
+      <div class="cohead"><button class="btn ghost icon" id="coUp" type="button" title="Up one folder" aria-label="Up one folder"><svg class="i" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button><code id="coPath"></code><button class="btn" id="coHere" type="button">Add this folder</button></div>
+      <div id="coList"></div>
+      <div class="hint" id="coMsg"></div>
+    </div>
+  </div>
+  <div class="df"><span class="err" id="lErr"></span><button class="btn" id="lCancel" type="button">Cancel</button><button class="btn primary" id="lGo" type="button">Launch</button></div>
+</dialog>
+
+<dialog id="editD">
+  <div class="dh">Edit order</div>
+  <div class="db"><textarea id="eText"></textarea></div>
+  <div class="df"><span class="err" id="eErr"></span><button class="btn" id="eCancel" type="button">Cancel</button><button class="btn primary" id="eGo" type="button">Save</button></div>
+</dialog>
+
+<div id="bridge" aria-hidden="true">
+  <div class="bh"><b id="bName"></b><span class="m" id="bState"></span><button class="btn" id="bClose">Close</button></div>
+  <div id="term"></div>
+</div>
+
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const state = { ships: [], fleets: [], sources: [], sel: null, ok: false };
+const ICON = {
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16v4z"/>', del: '<path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/>', x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  rocket: '<path d="M12 3c3.5 3.2 4.6 7.5 3.6 13H8.4C7.4 10.5 8.5 6.2 12 3z"/><circle cx="12" cy="10" r="1.6"/><path d="M8.4 14 5 17.5M15.6 14l3.4 3.5"/>',
+};
+const icon = (k) => `<svg class="i" viewBox="0 0 24 24">${ICON[k]}</svg>`;
+
+async function api(method, path, body) {
+  const res = await fetch(path, { method, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+// parallax starfield: stars stream past, so the rockets read as flying right
+(function stars() {
+  const c = $("stars"), g = c.getContext("2d");
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let W, H, pts = [], last = 0;
+  const make = () => {
+    W = c.width = innerWidth; H = c.height = innerHeight;
+    pts = Array.from({ length: Math.round(W * H / 6500) }, () => ({ x: Math.random() * W, y: Math.random() * H, z: Math.random() ** 2 * .9 + .1 }));
+  };
+  const draw = (t) => {
+    const dt = Math.min(.05, (t - last) / 1000 || 0); last = t;
+    g.clearRect(0, 0, W, H); g.strokeStyle = g.fillStyle = "#cfd8ff";
+    for (const p of pts) {
+      p.x -= still ? 0 : p.z * p.z * 120 * dt;
+      if (p.x < -20) { p.x = W + 10; p.y = Math.random() * H; }
+      g.globalAlpha = .12 + p.z * .75;
+      g.beginPath(); g.arc(p.x, p.y, p.z * 1.1, 0, 6.28); g.fill();
+      if (p.z > .6 && !still) { g.globalAlpha *= .3; g.lineWidth = .8; g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x + p.z * 12, p.y); g.stroke(); }
+    }
+    if (!still) requestAnimationFrame(draw);
+  };
+  addEventListener("resize", () => { make(); still && draw(0); }); make(); requestAnimationFrame(draw);
+})();
+
+const rocketSvg = (c) => `<svg viewBox="0 0 120 48" aria-hidden="true">
+  <g class="flame"><path d="M24 17C10 17 2 22-16 24 2 26 10 31 24 31Z" fill="#ffb454"/><path d="M24 20C16 20 10 23 0 24 10 25 16 28 24 28Z" fill="#fff3c4"/></g>
+  <path d="M40 14 24 1 60 14ZM40 34 24 47 60 34Z" fill="${esc(c || "#4c8dff")}"/>
+  <path d="M28 12H78C98 12 110 19 116 24 110 29 98 36 78 36H28Z" fill="#e6e9f2"/>
+  <path d="M28 30H114C108 33 98 36 78 36H28Z" fill="#aeb6d0" opacity=".7"/>
+  <rect x="52" y="12" width="7" height="24" fill="${esc(c || "#4c8dff")}" opacity=".9"/>
+  <circle cx="88" cy="24" r="6.5" fill="#0b0e17" stroke="#7fb2ff" stroke-width="2"/>
+  <rect x="21" y="17" width="8" height="14" rx="2" fill="#3a4260"/></svg>`;
+const STATUS = { underway: "Underway", needs_you: "Needs you", anchored: "Exited", sailing_off: "Departing" };
+const ago = (iso) => { const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000)); return m < 1 ? "just now" : m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
+
+const rockets = new Map();   // session -> element, updated in place so animations never restart
+const spot = new Map();      // session -> {x, y} as 0..1 of the field
+const hash = (str) => { let h = 2166136261; for (const ch of str) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return h >>> 0; };
+function place(session) {
+  if (spot.has(session)) return spot.get(session);
+  const f = $("field"), W = f.clientWidth || 1000, H = f.clientHeight || 700;
+  let seed = (hash(session) % 2147483646) + 1; const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  let best = null, bestD = -1;
+  for (let i = 0; i < 40; i++) {            // pick the emptiest of a few candidate spots
+    const p = { x: .14 + rnd() * .72, y: .3 + rnd() * .5 };
+    const d = Math.min(1e9, ...[...spot.values()].map((q) => Math.hypot((p.x - q.x) * W, (p.y - q.y) * H)));
+    if (d > bestD) { bestD = d; best = p; }
+  }
+  spot.set(session, best); return best;
+}
+const setText = (el, t) => { if (el.textContent !== t) el.textContent = t; };
+function makeRocket(s) {
+  const el = document.createElement("div");
+  el.className = "rk"; el.tabIndex = 0; el.setAttribute("role", "button"); el.dataset.s = s.session;
+  el.style.setProperty("--d", `${-(hash(s.session) % 46) / 10}s`);
+  el.innerHTML = `<div class="bob"><div class="ring"></div>${rocketSvg(s.fleet_color)}</div>
+    <div class="lbl"><div class="nm"></div><div class="meta"></div><div class="task"></div><span class="st"></span></div>`;
+  el.addEventListener("animationend", (e) => e.animationName === "arrive" && (el.style.animation = "none"));
+  return el;
+}
+function renderShips() {
+  const live = state.ships.filter((s) => s.status !== "sailing_off");
+  const need = live.filter((s) => s.status === "needs_you").length;
+  $("sub").textContent = live.length ? `${live.length} ${live.length === 1 ? "rocket" : "rockets"} in flight · ${new Set(live.map((s) => s.fleet)).size} fleet(s)` : "";
+  $("attn").hidden = !need; $("attn").textContent = `${need} need${need === 1 ? "s" : ""} you`; $("attn").classList.toggle("warn", !!need);
+  document.title = need ? `(${need}) Cadet` : "Cadet";
+  $("void").hidden = live.length > 0;
+  const field = $("field"), keep = new Set(live.map((s) => s.session));
+  for (const s of live) {
+    let el = rockets.get(s.session);
+    if (!el) { el = makeRocket(s); rockets.set(s.session, el); field.appendChild(el); }
+    el.dataset.st = s.status;
+    el.setAttribute("aria-label", `Open ${s.name}, ${STATUS[s.status] || s.status}`);
+    setText(el.querySelector(".nm"), s.name);
+    setText(el.querySelector(".meta"), `${s.fleet_name} · ${s.harness}`);
+    setText(el.querySelector(".task"), s.title || s.repo || "");
+    setText(el.querySelector(".st"), `${STATUS[s.status] || s.status} · ${ago(s.launched)}`);
+    const dismiss = el.querySelector(".x");
+    if (s.status === "anchored" && !dismiss) el.insertAdjacentHTML("beforeend", `<button class="btn ghost icon x" data-d="${esc(s.session)}" title="Dismiss" aria-label="Dismiss">${icon("x")}</button>`);
+    else if (s.status !== "anchored" && dismiss) dismiss.remove();
+    if (s.position) spot.set(s.session, s.position);
+    if (!el.classList.contains("drag")) { const p = place(s.session); el.style.left = p.x * 100 + "%"; el.style.top = p.y * 100 + "%"; }
+  }
+  for (const [k, el] of rockets) if (!keep.has(k)) {
+    rockets.delete(k); spot.delete(k); el.classList.add("leaving"); setTimeout(() => el.remove(), 900);
+  }
+  renderOrders();
+}
+
+function renderOrders() {
+  const taken = new Set(state.ships.map((s) => s.source + "/" + s.order_id));
+  const out = []; let n = 0;
+  for (const src of state.sources) for (const p of src.panels || []) for (const o of p.orders || []) {
+    if (taken.has(src.key + "/" + o.id)) continue; n++;
+    const sel = state.sel && state.sel.src === src.key && state.sel.id === o.id;
+    const can = (c) => (src.capabilities || []).includes(c);
+    out.push(`<div class="row ${sel ? "sel" : ""}" tabindex="0" data-src="${esc(src.key)}" data-panel="${esc(p.id)}" data-id="${esc(o.id)}">
+      <div class="tx"><div class="t">${o.hot ? `<span class="hot">● </span>` : ""}${esc(o.title)}</div><div class="s">${esc(src.name)}${p.title && p.title !== src.name ? " · " + esc(p.title) : ""}</div></div>
+      <div class="acts">${can("edit") ? `<button class="btn ghost icon" data-edit title="Edit" aria-label="Edit">${icon("edit")}</button>` : ""}${can("remove") ? `<button class="btn ghost icon" data-del title="Remove" aria-label="Remove">${icon("del")}</button>` : ""}</div></div>`);
+  }
+  $("oc").textContent = n || "";
+  const html = out.join("") || `<div class="hint">No orders waiting. Add one below, or launch with typed text.</div>`;
+  if (html !== renderOrders.last) { renderOrders.last = html; $("orders").innerHTML = html; }
+}
+
+function renderFleets() {
+  $("fleets").innerHTML = state.fleets.length ? state.fleets.map((f) => `
+    <div class="fleet"><div class="fn"><span class="sw" style="background:${esc(f.color)}"></span>${esc(f.name)}</div>
+    <div class="docks">${(f.docks || []).map((d) => `<button class="btn" data-fleet="${esc(f.key)}" data-harness="${esc(d.harness)}" ${d.executable_found && f.can_launch ? "" : "disabled"} title="${d.executable_found ? "Launch a " + esc(d.harness) + " session" : esc(d.harness) + " is not installed"}">${icon("rocket")}${esc(d.harness)}</button>`).join("") || `<span class="hint">No harnesses</span>`}</div></div>`).join("")
+    : `<div class="hint">No fleets yet. Use “Set up fleets” in the top bar.</div>`;
+}
+
+// data
+async function refreshShips() {
+  try { state.ships = (await api("GET", "/api/ships")).ships; setConn(true); renderShips(); } catch { setConn(false); }
+}
+async function refreshStatic() {
+  try {
+    state.fleets = (await api("GET", "/api/config")).fleets || [];
+    state.sources = await api("GET", "/api/sources");
+    renderFleets(); renderOrders();
+  } catch {}
+}
+function setConn(ok) { state.ok = ok; $("conn").classList.toggle("on", ok); $("conn").lastElementChild.textContent = ok ? "Admiral online" : "Admiral unreachable"; }
+
+// orders
+const orderOf = (row) => { const s = state.sources.find((x) => x.key === row.dataset.src); return { s, o: s?.panels.flatMap((p) => p.orders).find((o) => o.id === row.dataset.id), panel: row.dataset.panel }; };
+$("orders").addEventListener("click", async (e) => {
+  const row = e.target.closest(".row"); if (!row) return;
+  const { s, o, panel } = orderOf(row);
+  if (e.target.closest("[data-edit]")) { editing = { s, o, panel }; $("eText").value = o.text || o.title; $("eErr").textContent = ""; return $("editD").showModal(); }
+  if (e.target.closest("[data-del]")) { if (confirm(`Remove “${o.title}”?`)) { await api("DELETE", `/api/sources/${s.key}/orders/${o.id}?panel=${panel}`).catch((x) => alert(x.message)); setTimeout(refreshStatic, 250); } return; }
+  state.sel = state.sel && state.sel.id === o.id ? null : { src: s.key, id: o.id, panel }; renderOrders();
+});
+let editing = null;
+$("eCancel").onclick = () => $("editD").close();
+$("eGo").onclick = async () => {
+  try { await api("PUT", `/api/sources/${editing.s.key}/orders/${editing.o.id}`, { panel: editing.panel, text: $("eText").value }); $("editD").close(); setTimeout(refreshStatic, 250); }
+  catch (x) { $("eErr").textContent = x.message; }
+};
+$("addForm").onsubmit = async (e) => {
+  e.preventDefault(); const text = $("newOrder").value.trim(); if (!text) return;
+  const src = state.sources.find((s) => (s.capabilities || []).includes("add"));
+  if (!src) return alert("No order source accepts new orders.");
+  try { await api("POST", `/api/sources/${src.key}/orders`, { panel: src.panels?.[0]?.id, text }); } catch (x) { return alert(x.message); }
+  $("newOrder").value = ""; setTimeout(refreshStatic, 250);
+};
+
+// launch
+let pending = null;
+async function loadSkills() {
+  const q = new URLSearchParams({ fleet: pending.fleet, harness: pending.harness, dir: $("lDir").value });
+  const sel = $("lSkill"); sel.innerHTML = `<option value='{"kind":"none"}'>None</option>`;
+  try {
+    const r = await api("GET", "/api/launch-orders/skills?" + q);
+    const opt = (v, t) => `<option value='${esc(JSON.stringify(v))}'>${esc(t)}</option>`;
+    let h = "";
+    if (r.commodore?.found) h += opt({ kind: "commodore", name: r.commodore.name }, "Commodore");
+    h += opt({ kind: "none" }, "None");
+    const favs = (r.skills || []).filter((s) => s.favorite), rest = (r.skills || []).filter((s) => !s.favorite);
+    if (favs.length) h += `<optgroup label="Favorites">${favs.map((s) => opt({ kind: "skill", name: s.name }, s.name)).join("")}</optgroup>`;
+    if (rest.length) h += `<optgroup label="All skills">${rest.map((s) => opt({ kind: "skill", name: s.name }, s.name)).join("")}</optgroup>`;
+    sel.innerHTML = h;
+  } catch {}
+}
+function fillOrderPicker(selectedKey) {
+  const opts = [`<option value="">Write my own order</option>`];
+  for (const src of state.sources) for (const p of src.panels || []) {
+    const taken = new Set(state.ships.map((x) => x.source + "/" + x.order_id));
+    const items = (p.orders || []).filter((o) => !taken.has(src.key + "/" + o.id));
+    if (items.length) opts.push(`<optgroup label="${esc(src.name)}${p.title && p.title !== src.name ? " · " + esc(p.title) : ""}">${items.map((o) => `<option value="${esc(src.key + "|" + o.id)}">${esc(o.title)}</option>`).join("")}</optgroup>`);
+  }
+  opts.push(`<option value="__add">+ Add a new source…</option>`);
+  $("lOrder").innerHTML = opts.join("");
+  $("lOrder").value = [...$("lOrder").options].some((o) => o.value === selectedKey) ? selectedKey : "";
+  applyOrder();
+}
+function applyOrder() {
+  const v = $("lOrder").value;
+  $("srcBox").hidden = v !== "__add";
+  const [src, id] = v && v !== "__add" ? v.split("|") : [];
+  const ord = src ? state.sources.find((x) => x.key === src)?.panels.flatMap((p) => p.orders).find((o) => o.id === id) : null;
+  pending.order = ord ? { src, id } : null;
+  $("lText").hidden = v === "__add";
+  const wasLocked = $("lText").disabled;
+  $("lText").disabled = !!ord;
+  if (ord) $("lText").value = ord.text || ord.title; else if (wasLocked) $("lText").value = "";
+  $("lNote").hidden = $("lNoteL").hidden = !ord;
+  if (v === "__add") loadPlugins();
+}
+async function loadPlugins() {
+  try {
+    const list = (await api("GET", "/api/plugins")).filter((p) => p.valid);
+    $("srcPlugin").innerHTML = list.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} — ${esc(p.description)}</option>`).join("");
+    $("srcHint").textContent = "";
+  } catch (x) { $("srcHint").textContent = x.message; }
+}
+$("lOrder").onchange = applyOrder;
+$("srcCancel").onclick = () => { $("lOrder").value = ""; applyOrder(); };
+$("srcAdd").onclick = async () => {
+  const plugin = $("srcPlugin").value; if (!plugin) return;
+  $("srcAdd").disabled = true; $("srcHint").textContent = "Adding…";
+  try {
+    const name = $("srcName").value.trim();
+    const created = await api("POST", "/api/sources", { plugin, ...(name && { name }) });
+    $("srcName").value = "";
+    let src = created;
+    for (let i = 0; i < 12 && (src.state === "starting"); i++) {   // wait for its first order list
+      await new Promise((r) => setTimeout(r, 300));
+      src = (await api("GET", "/api/sources")).find((x) => x.key === created.key) || src;
+    }
+    state.sources = await api("GET", "/api/sources"); renderOrders();
+    const note = src.auth ? `${src.name} needs sign-in: ${src.auth.message || "see Admiral"}` : src.state === "error" ? `${src.name} failed: ${src.error}` : "";
+    fillOrderPicker("");
+    $("lErr").textContent = note || "";
+    if (!note) $("srcHint").textContent = "";
+  } catch (x) { $("srcHint").textContent = x.message; }
+  $("srcAdd").disabled = false;
+};
+
+async function loadDirs(prefer) {
+  try {
+    const { entries, selected } = await api("POST", "/api/launch-orders/dirs", { fleet: pending.fleet, harness: pending.harness, ...(pending.order && { source: pending.order.src, order_id: pending.order.id }) });
+    const pick = entries.some((d) => d.path === prefer) ? prefer : selected;
+    $("lDir").innerHTML = entries.map((d) => `<option value="${esc(d.path)}" ${d.path === pick ? "selected" : ""}>${esc(d.name)}${d.kind === "search_root" ? " (folder)" : ""} — ${esc(d.path)}${d.ships_here ? " · " + d.ships_here + " active" : ""}</option>`).join("") || "<option value=''>No checkouts found</option>";
+    loadSkills();
+    return entries;
+  } catch (x) { $("lErr").textContent = x.message; return []; }
+}
+
+// browse folders on this Mac and add them to the fleet's checkout menu (Admiral stores them as search roots)
+let coCur = null;
+const inMenu = (p) => [...$("lDir").options].some((o) => o.value === p);
+async function coLoad(path) {
+  $("coMsg").textContent = "";
+  try { coCur = await api("GET", "/cadet/fs?path=" + encodeURIComponent(path || "")); } catch (x) { $("coMsg").textContent = x.message; return; }
+  $("coPath").textContent = coCur.path; $("coUp").disabled = !coCur.parent;
+  $("coHere").disabled = inMenu(coCur.path); $("coHere").textContent = inMenu(coCur.path) ? "In menu" : "Add this folder";
+  $("coList").innerHTML = coCur.dirs.map((d) => `<div class="co" data-p="${esc(d.path)}"><span class="nm">${esc(d.name)}</span>${d.git ? `<span class="tag">GIT</span>` : ""}
+    ${inMenu(d.path) ? `<span class="in">In menu</span>` : `<button class="btn" data-add type="button">Add</button>`}</div>`).join("") || `<div class="hint" style="padding:6px">No folders here.</div>`;
+}
+async function coAdd(path) {
+  $("coMsg").textContent = "Adding…";
+  try {
+    await api("POST", "/cadet/checkouts", { fleet: pending.fleet, path });
+    let found = false;
+    for (let i = 0; i < 16 && !found; i++) {     // Admiral picks the config change up by itself
+      await new Promise((r) => setTimeout(r, 250));
+      found = (await loadDirs(path)).some((d) => d.path === path || d.path.startsWith(path + "/"));
+    }
+    await coLoad(coCur.path);
+    $("coMsg").textContent = found ? "Added. It's in the menu now." : "Saved, but Admiral hasn't listed it yet.";
+  } catch (x) { $("coMsg").textContent = x.message; }
+}
+$("coOpen").onclick = () => {
+  $("coBox").hidden = !$("coBox").hidden;
+  if (!$("coBox").hidden) { const cur = $("lDir").value; coLoad(cur ? cur.replace(/\/[^/]*$/, "") || "/" : ""); }
+};
+$("coUp").onclick = () => coCur?.parent && coLoad(coCur.parent);
+$("coHere").onclick = () => coCur && coAdd(coCur.path);
+$("coList").addEventListener("click", (e) => {
+  const row = e.target.closest(".co"); if (!row) return;
+  if (e.target.closest("[data-add]")) coAdd(row.dataset.p); else coLoad(row.dataset.p);
+});
+
+$("fleets").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-fleet]"); if (!b) return;
+  const row = state.sel && [...document.querySelectorAll(".row.sel")][0];
+  pending = { fleet: b.dataset.fleet, harness: b.dataset.harness, order: null };
+  $("lTitle").firstChild.textContent = "Launch session";
+  $("lSub").textContent = `${state.fleets.find((f) => f.key === pending.fleet)?.name} · ${pending.harness}`;
+  $("lText").value = ""; $("lNote").value = "";
+  fillOrderPicker(row ? state.sel.src + "|" + state.sel.id : "");
+  $("lErr").textContent = ""; $("lDir").innerHTML = "<option>Scanning…</option>"; $("lSkill").innerHTML = "";
+  $("coBox").hidden = true;
+  $("launch").showModal();
+  await loadDirs();
+});
+$("lDir").onchange = loadSkills;
+$("lCancel").onclick = () => $("launch").close();
+$("lGo").onclick = async () => {
+  if ($("lOrder").value === "__add") { $("lErr").textContent = "Add the source, or pick an order."; return; }
+  const body = { fleet: pending.fleet, harness: pending.harness, dir: $("lDir").value, skill: JSON.parse($("lSkill").value || '{"kind":"none"}') };
+  if (pending.order) { body.source = pending.order.src; body.order_id = pending.order.id; if ($("lNote").value.trim()) body.note = $("lNote").value.trim(); }
+  else if (!($("lText").value.trim())) { $("lErr").textContent = "Write an order first."; return; }
+  else body.text = $("lText").value.trim();
+  $("lGo").disabled = true;
+  try { await api("POST", "/api/ships", body); $("launch").close(); state.sel = null; refreshShips(); refreshStatic(); }
+  catch (x) { $("lErr").textContent = x.message; }
+  $("lGo").disabled = false;
+};
+
+// ships
+const board = (el) => openTerminal(`/ws/bridge/${encodeURIComponent(el.dataset.s)}`, state.ships.find((x) => x.session === el.dataset.s));
+$("field").addEventListener("click", async (e) => {
+  const d = e.target.closest("[data-d]");
+  if (d) { e.stopPropagation(); await api("POST", `/api/ships/${d.dataset.d}/dismiss`).catch(() => {}); refreshShips(); }
+});
+$("field").addEventListener("keydown", (e) => {
+  const el = e.target.closest(".rk");
+  if (el && e.target === el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); board(el); }
+});
+// drag a rocket to reposition it (saved in Admiral, so its own UI shows the same layout); a tap boards it
+let drag = null;
+$("field").addEventListener("pointerdown", (e) => {
+  const el = e.target.closest(".rk"); if (!el || e.target.closest("[data-d]")) return;
+  drag = { el, x0: e.clientX, y0: e.clientY, moved: false }; el.setPointerCapture(e.pointerId);
+});
+$("field").addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  if (!drag.moved && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
+  drag.moved = true; drag.el.classList.add("drag");
+  const r = $("field").getBoundingClientRect();
+  drag.pos = { x: Math.min(.95, Math.max(.05, (e.clientX - r.left) / r.width)), y: Math.min(.95, Math.max(.1, (e.clientY - r.top) / r.height)) };
+  drag.el.style.left = drag.pos.x * 100 + "%"; drag.el.style.top = drag.pos.y * 100 + "%";
+});
+const endDrag = async (e) => {
+  if (!drag) return; const { el, moved, pos } = drag; drag = null;
+  if (!moved) { board(el); return; }
+  spot.set(el.dataset.s, pos);
+  await api("PUT", `/api/ships/${encodeURIComponent(el.dataset.s)}/position`, pos).catch(() => {});
+  el.classList.remove("drag");
+};
+$("field").addEventListener("pointerup", endDrag);
+$("field").addEventListener("pointercancel", endDrag);
+
+// terminal (ship bridge, and the setup terminal)
+let ws, term, fit, bridgeShip;
+function openTerminal(path, ship, title) {
+  closeTerminal();
+  bridgeShip = ship || null;
+  $("bName").textContent = title || (ship ? ship.name : "");
+  $("bState").textContent = ship ? `${ship.fleet_name} · ${ship.harness} · connecting` : "connecting";
+  $("bridge").classList.add("open"); $("bridge").setAttribute("aria-hidden", "false");
+  term = new Terminal({ fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace", fontSize: 13, scrollback: 2000, cursorBlink: true, theme: { background: "#0b0e17", foreground: "#e6e9f2" } });
+  fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open($("term")); setTimeout(() => fit.fit(), 240);
+  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`);
+  ws.binaryType = "arraybuffer";
+  const send = (o) => ws.readyState === 1 && ws.send(JSON.stringify(o));
+  const status = (t) => ($("bState").textContent = (ship ? `${ship.fleet_name} · ${ship.harness} · ` : "") + t);
+  ws.onopen = () => send({ type: "join", cols: term.cols, rows: term.rows });
+  ws.onmessage = (m) => {
+    if (typeof m.data !== "string") return term.write(new Uint8Array(m.data));
+    const msg = JSON.parse(m.data);
+    if (msg.type === "join") {
+      status("connected"); term.reset();
+      if (msg.scrollback) term.write(msg.scrollback.replace(/\n/g, "\r\n") + "\r\n");
+      term.write(msg.screen.replace(/\n/g, "\r\n"));
+      if (msg.cursor) term.write(`\x1b[${msg.cursor.y + 1};${msg.cursor.x + 1}H`);
+    } else if (msg.type === "refused") status("exited, read only");
+  };
+  ws.onclose = () => status("disconnected");
+  let seen = false;
+  term.onData((data) => { send({ type: "input", data }); if (ship && !seen) { seen = true; api("POST", `/api/ships/${ship.session}/input-seen`).catch(() => {}); setTimeout(() => (seen = false), 3000); } });
+  term.onResize(({ cols, rows }) => send({ type: "resize", cols, rows }));
+  term.focus();
+}
+function closeTerminal() {
+  ws && ws.close(); term && term.dispose(); ws = term = fit = null;
+  $("term").innerHTML = ""; $("bridge").classList.remove("open"); $("bridge").setAttribute("aria-hidden", "true");
+}
+addEventListener("resize", () => fit && fit.fit());
+addEventListener("keydown", (e) => e.key === "Escape" && $("bridge").classList.contains("open") && !$("launch").open && closeTerminal());
+$("bClose").onclick = () => { const wasSetup = !bridgeShip; closeTerminal(); if (wasSetup) refreshStatic(); };
+$("setupBtn").onclick = async () => {
+  try { await api("POST", "/api/setup"); } catch (x) { return alert(x.message); }
+  openTerminal("/ws/bridge/_setup", null, "Fleet setup");
+};
+
+refreshShips(); refreshStatic();
+setInterval(refreshShips, 1500);
+setInterval(refreshStatic, 6000);
+</script>
+</body>
+</html>

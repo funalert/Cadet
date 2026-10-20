@@ -1,0 +1,388 @@
+#!/usr/bin/env python3
+"""Cadet: a space-themed UI on top of Admiral.
+
+Serves web/ and forwards /api and /ws to a running Admiral, so the browser
+sees one origin. Standard library only.
+
+  cadet             run in this terminal on 127.0.0.1:7421 (Admiral at 127.0.0.1:7420)
+  cadet install     run in the background now and at every login (macOS LaunchAgent)
+  cadet uninstall   stop it and remove the LaunchAgent
+  cadet status      say whether the background service is running
+  cadet open        open Cadet in your browser
+"""
+import asyncio
+import json
+import mimetypes
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import urllib.request
+from pathlib import Path
+from urllib.parse import parse_qs
+
+HERE = Path(os.path.realpath(__file__)).parent
+WEB = HERE / "web"
+APP = Path.home() / ".cadet/app"
+LABEL = "dev.cadet"
+PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
+
+
+def env(name, default):
+    return os.environ.get(name, default)
+
+
+GITHUB_API = env("CADET_GITHUB_API", "https://api.github.com")
+GITHUB_DL = env("CADET_GITHUB_DL", "https://codeload.github.com")
+ADMIRAL = env("CADET_ADMIRAL", "127.0.0.1:7420")
+LISTEN = env("CADET_LISTEN", "127.0.0.1:7421")
+
+
+def split(addr):
+    host, _, port = addr.rpartition(":")
+    return host, int(port)
+
+
+async def pipe(reader, writer):
+    try:
+        while data := await reader.read(65536):
+            writer.write(data)
+            await writer.drain()
+    except (ConnectionError, asyncio.CancelledError):
+        pass
+    finally:
+        writer.close()
+
+
+async def respond(writer, status, body=b"", ctype="text/plain; charset=utf-8"):
+    head = f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+    writer.write(head.encode() + body)
+    await writer.drain()
+    writer.close()
+
+
+def loopback(host):
+    return host in ("127.0.0.1", "localhost", "::1", "[::1]")
+
+
+def trusted(headers):
+    """Refuse requests another website could be making through the user's browser:
+    a Host that isn't ours (DNS rebinding) or an Origin that isn't ours (cross-site)."""
+    host = headers.get("host", "")
+    lhost, lport = split(LISTEN)
+    if loopback(lhost) and host not in (LISTEN, f"localhost:{lport}", f"127.0.0.1:{lport}"):
+        return False
+    origin = headers.get("origin")
+    return origin is None or origin == f"http://{host}"
+
+
+def json_reply(writer, status, obj):
+    return respond(writer, status, json.dumps(obj).encode(), "application/json")
+
+
+def admiral_bin():
+    for p in (shutil.which("admiral"), "/opt/homebrew/bin/admiral", "/usr/local/bin/admiral", str(Path.home() / ".local/bin/admiral")):
+        if p and os.access(p, os.X_OK):
+            return p
+
+
+def list_dirs(raw):
+    path = Path(os.path.abspath(Path(raw or "~").expanduser()))
+    if not path.is_dir():
+        raise ValueError(f"{path} is not a folder")
+    dirs = []
+    try:
+        for e in sorted(path.iterdir(), key=lambda e: e.name.lower()):
+            try:
+                if e.name.startswith(".") or not e.is_dir():
+                    continue
+                dirs.append({"name": e.name, "path": str(e), "git": (e / ".git").exists()})
+            except OSError:
+                continue
+    except PermissionError:
+        raise ValueError(f"No permission to read {path}")
+    parent = str(path.parent) if path.parent != path else None
+    return {"path": str(path), "parent": parent, "git": (path / ".git").exists(), "dirs": dirs[:500]}
+
+
+async def add_checkout(fleet, raw):
+    """Add a folder to a fleet's search roots with Admiral's own CLI; Admiral watches its config and picks it up."""
+    given = Path(str(raw)).expanduser()
+    path = Path(os.path.abspath(given))
+    if not given.is_absolute() or not path.is_dir():
+        raise ValueError("Choose an existing folder")
+    binary = admiral_bin()
+    if not binary:
+        raise ValueError("Cannot find the admiral command")
+    proc = await asyncio.create_subprocess_exec(binary, "fleet", "edit", str(fleet), "--search-root", str(path),
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), 15)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise ValueError("admiral did not answer")
+    if proc.returncode != 0:
+        raise ValueError(out.decode(errors="replace").strip() or "admiral refused the folder")
+    return str(path)
+
+
+
+# ---- updates: compare the installed commit with the repo's default branch on GitHub
+def git_out(*args):
+    r = subprocess.run(["git", "-C", str(HERE), *args], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def repo_slug(url):
+    m = re.search(r"github\.com[:/]+([\w.-]+/[\w.-]+?)(?:\.git)?/?$", url or "")
+    return m.group(1) if m else None
+
+
+def current_version():
+    """{repo, sha}: from VERSION.json in an installed copy, else from the git checkout we run in."""
+    try:
+        v = json.loads((HERE / "VERSION.json").read_text())
+    except (OSError, ValueError):
+        v = {"repo": repo_slug(git_out("remote", "get-url", "origin")), "sha": git_out("rev-parse", "HEAD") or None}
+    return {"repo": env("CADET_REPO", "") or v.get("repo"), "sha": v.get("sha")}
+
+
+def fetch_json(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "cadet-updater", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.load(r)
+
+
+_cache = {"at": 0.0, "value": None}
+
+
+def check_update(force=False):
+    if not force and _cache["value"] and time.time() - _cache["at"] < 600:
+        return _cache["value"]
+    cur = current_version()
+    out = {"available": False, "current": cur["sha"], "repo": cur["repo"], "canInstall": HERE == APP, "latest": None, "notes": [], "behind": 0}
+    if cur["repo"] and cur["sha"]:
+        try:
+            latest = fetch_json(f"{GITHUB_API}/repos/{cur['repo']}/commits/HEAD")["sha"]
+            out["latest"] = latest
+            if latest != cur["sha"]:
+                try:
+                    cmp = fetch_json(f"{GITHUB_API}/repos/{cur['repo']}/compare/{cur['sha']}...{latest}")
+                    if cmp.get("status") == "ahead":   # we are behind; "diverged" or unknown commits (local work) never prompt
+                        out["available"] = True
+                        out["behind"] = cmp.get("ahead_by", 0)
+                        out["notes"] = [c["commit"]["message"].split("\n")[0] for c in reversed(cmp.get("commits", []))][:8]
+                except urllib.error.HTTPError as e:
+                    if e.code != 404:
+                        raise
+        except (OSError, ValueError, KeyError) as e:
+            out["error"] = str(e)
+    _cache.update(at=time.time(), value=out)
+    return out
+
+
+def safe_extract(tar, dest):
+    base = os.path.realpath(dest)
+    for m in tar.getmembers():
+        target = os.path.realpath(os.path.join(dest, m.name))
+        if not (target == base or target.startswith(base + os.sep)) or m.issym() or m.islnk() or m.isdev():
+            raise ValueError(f"unsafe path in update: {m.name}")
+    tar.extractall(dest)
+
+
+def apply_update():
+    info = check_update(force=True)
+    if not info["canInstall"]:
+        raise ValueError("Cadet isn't installed as a service here. Run: git pull && cadet install")
+    if not info["available"]:
+        raise ValueError("Already up to date")
+    sha, repo = info["latest"], info["repo"]
+    APP.parent.mkdir(exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix="update-", dir=APP.parent))
+    try:
+        req = urllib.request.Request(f"{GITHUB_DL}/{repo}/tar.gz/{sha}", headers={"User-Agent": "cadet-updater"})
+        tgz = work / "src.tgz"
+        with urllib.request.urlopen(req, timeout=30) as r, open(tgz, "wb") as f:
+            n = 0
+            while chunk := r.read(65536):
+                n += len(chunk)
+                if n > 25_000_000:
+                    raise ValueError("update is unexpectedly large")
+                f.write(chunk)
+        with tarfile.open(tgz) as t:
+            safe_extract(t, work / "x")
+        roots = list((work / "x").iterdir())
+        if len(roots) != 1 or not (roots[0] / "cadet").is_file() or not (roots[0] / "web/index.html").is_file():
+            raise ValueError("the download doesn't look like Cadet")
+        compile((roots[0] / "cadet").read_text(), "cadet", "exec")   # refuse an update that can't even start
+        new = work / "app"
+        new.mkdir()
+        shutil.copy2(roots[0] / "cadet", new / "cadet")
+        shutil.copytree(roots[0] / "web", new / "web")
+        (new / "VERSION.json").write_text(json.dumps({"repo": repo, "sha": sha}))
+        old = APP.parent / "app.old"
+        shutil.rmtree(old, ignore_errors=True)
+        os.rename(APP, old)
+        try:
+            os.rename(new, APP)
+        except OSError:
+            os.rename(old, APP)
+            raise
+        shutil.rmtree(old, ignore_errors=True)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    _cache["value"] = None
+
+
+def restart():
+    os.execv(sys.executable, [sys.executable, str(APP / "cadet")])
+
+
+async def cadet_api(reader, writer, method, path, query, headers):
+    try:
+        if method == "GET" and path == "/cadet/fs":
+            return await json_reply(writer, "200 OK", list_dirs(query.get("path", [""])[0]))
+        if method == "GET" and path == "/cadet/update":
+            return await json_reply(writer, "200 OK", await asyncio.to_thread(check_update, "force" in query))
+        if method == "POST" and path == "/cadet/update":
+            await asyncio.to_thread(apply_update)
+            await json_reply(writer, "200 OK", {"ok": True})
+            asyncio.get_running_loop().call_later(0.5, restart)
+            return
+        if method == "POST" and path == "/cadet/checkouts":
+            n = int(headers.get("content-length", "0"))
+            if n > 65536:
+                raise ValueError("request too large")
+            body = json.loads(await reader.readexactly(n) or b"{}")
+            return await json_reply(writer, "200 OK", {"path": await add_checkout(body.get("fleet", ""), body.get("path", ""))})
+    except (ValueError, json.JSONDecodeError, OSError, tarfile.TarError) as e:
+        return await json_reply(writer, "400 Bad Request", {"error": str(e)})
+    await respond(writer, "404 Not Found", b'{"error":"not found"}', "application/json")
+
+
+async def handle(reader, writer):
+    try:
+        raw = await reader.readuntil(b"\r\n\r\n")
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError):
+        writer.close()
+        return
+    lines = raw.decode("latin-1").split("\r\n")[:-2]
+    method, target, _ = lines[0].split(" ", 2)
+    path, _, qs = target.partition("?")
+    headers = {k.strip().lower(): v.strip() for k, _, v in (l.partition(":") for l in lines[1:])}
+
+    if not trusted(headers):
+        await respond(writer, "403 Forbidden", b"forbidden")
+        return
+    if path.startswith("/cadet/"):
+        await cadet_api(reader, writer, method, path, parse_qs(qs), headers)
+        return
+    if path.startswith(("/api", "/ws")):
+        await proxy(reader, writer, lines)
+        return
+    if method not in ("GET", "HEAD"):
+        await respond(writer, "405 Method Not Allowed")
+        return
+    rel = "index.html" if path == "/" else path.lstrip("/")
+    file = (WEB / rel).resolve()
+    if WEB.resolve() not in file.parents or not file.is_file():
+        await respond(writer, "404 Not Found", b"not found")
+        return
+    ctype = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+    await respond(writer, "200 OK", file.read_bytes(), ctype)
+
+
+async def proxy(reader, writer, lines):
+    """Forward one request to Admiral, then relay bytes both ways (so WebSockets work)."""
+    host, port = split(ADMIRAL)
+    try:
+        ureader, uwriter = await asyncio.open_connection(host, port)
+    except OSError:
+        await respond(writer, "502 Bad Gateway", b'{"error":"Admiral is not running"}', "application/json")
+        return
+    out = [lines[0]]
+    upgrade = False
+    for line in lines[1:]:
+        name, _, value = line.partition(":")
+        key = name.lower()
+        if key == "host":
+            line = f"Host: {ADMIRAL}"
+        elif key == "origin":
+            line = f"Origin: http://{ADMIRAL}"
+        elif key == "connection" and "upgrade" in value.lower():
+            upgrade = True
+        elif key == "connection":
+            continue
+        out.append(line)
+    if not upgrade:
+        out.append("Connection: close")
+    uwriter.write(("\r\n".join(out) + "\r\n\r\n").encode("latin-1"))
+    await uwriter.drain()
+    await asyncio.gather(pipe(reader, uwriter), pipe(ureader, writer))
+
+
+async def serve():
+    host, port = split(LISTEN)
+    server = await asyncio.start_server(handle, host, port)
+    print(f"Cadet is flying at http://{LISTEN}/  (Admiral at {ADMIRAL})", flush=True)
+    async with server:
+        await server.serve_forever()
+
+
+def service(action):
+    if sys.platform != "darwin":
+        sys.exit("cadet service is macOS only")
+    domain = f"gui/{os.getuid()}"
+    if action == "install":
+        # launchd can't read removable drives or protected folders, so run from a copy.
+        APP.parent.mkdir(exist_ok=True)
+        shutil.rmtree(APP, ignore_errors=True)
+        APP.mkdir()
+        shutil.copy2(HERE / "cadet", APP / "cadet")
+        shutil.copytree(WEB, APP / "web")
+        (APP / "VERSION.json").write_text(json.dumps(current_version()))
+        python = next((p for p in ("/opt/homebrew/bin/python3", "/usr/local/bin/python3") if os.access(p, os.X_OK)), sys.executable)
+        log = APP.parent / "cadet.log"
+        PLIST.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>{LABEL}</string>
+<key>ProgramArguments</key><array><string>{python}</string><string>{APP / "cadet"}</string></array>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>StandardOutPath</key><string>{log}</string><key>StandardErrorPath</key><string>{log}</string>
+</dict></plist>
+""")
+        subprocess.run(["launchctl", "bootout", f"{domain}/{LABEL}"], capture_output=True)
+        subprocess.run(["launchctl", "bootstrap", domain, str(PLIST)], check=True)
+        print(f"Cadet is running in the background and starts at login.\nOpen http://{LISTEN}/  (or run: cadet open)")
+    elif action == "uninstall":
+        subprocess.run(["launchctl", "bootout", f"{domain}/{LABEL}"], capture_output=True)
+        PLIST.unlink(missing_ok=True)
+        shutil.rmtree(APP.parent, ignore_errors=True)
+        print("Cadet removed. (The checkout you installed from is untouched.)")
+    elif action == "status":
+        r = subprocess.run(["launchctl", "print", f"{domain}/{LABEL}"], capture_output=True)
+        print(f"Cadet service: {'running' if r.returncode == 0 else 'not installed'}  (http://{LISTEN}/)")
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    args = sys.argv[1:]
+    if args[:1] == ["service"]:
+        service(args[1] if len(args) > 1 else "")
+    elif args in (["install"], ["uninstall"], ["status"]):
+        service(args[0])
+    elif args == ["open"]:
+        subprocess.run(["open", f"http://{LISTEN}/"])
+    elif args:
+        sys.exit(__doc__)
+    else:
+        try:
+            asyncio.run(serve())
+        except KeyboardInterrupt:
+            pass
