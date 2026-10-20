@@ -31,6 +31,11 @@ header { position: relative; z-index: 1; display: flex; align-items: center; gap
 .pill { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); font-size: 12px; background: var(--surface); }
 .pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--bad); }
 .pill.on i { background: var(--ok); }
+.pill.upd { color: var(--accent); border-color: rgba(76,141,255,.5); background: rgba(76,141,255,.1); cursor: pointer; font: inherit; font-size: 12px; }
+.pill.upd:hover { border-color: var(--accent); }
+.pill.upd svg { width: 13px; height: 13px; }
+#updList { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+#updList li { margin: 3px 0; }
 .pill[hidden] { display: none; }
 .pill.warn { color: var(--warn); border-color: rgba(245,165,36,.4); }
 
@@ -156,6 +161,7 @@ dialog::backdrop { background: rgba(4,6,12,.7); backdrop-filter: blur(2px); }
 <header>
   <div class="brand"><span class="mark"><svg class="i" viewBox="0 0 24 24"><path d="M12 3c3.5 3.2 4.6 7.5 3.6 13H8.4C7.4 10.5 8.5 6.2 12 3z"/><path d="M8.4 14 5 17.5M15.6 14l3.4 3.5"/></svg></span>Cadet <small>on Admiral</small></div>
   <div class="spacer"></div>
+  <button class="pill upd" id="updTag" hidden title="A newer version of Cadet is available"><svg class="i" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg><span>Update available</span></button>
   <span class="pill" id="attn" hidden></span>
   <span class="pill" id="conn"><i></i><span>Connecting</span></span>
   <button class="btn" id="setupBtn"><svg class="i" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.6a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2 1.2l.4 2.6h4l.4-2.6a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg>Set up fleets</button>
@@ -204,6 +210,12 @@ dialog::backdrop { background: rgba(4,6,12,.7); backdrop-filter: blur(2px); }
     </div>
   </div>
   <div class="df"><span class="err" id="lErr"></span><button class="btn" id="lCancel" type="button">Cancel</button><button class="btn primary" id="lGo" type="button">Launch</button></div>
+</dialog>
+
+<dialog id="updD">
+  <div class="dh">Update Cadet<small id="updSub"></small></div>
+  <div class="db"><div class="label" style="margin:12px 0 0">What's new</div><ul id="updList"></ul><p class="hint" id="updMsg"></p></div>
+  <div class="df"><span class="err" id="updErr"></span><button class="btn" id="updCancel" type="button">Later</button><button class="btn primary" id="updGo" type="button">Update &amp; restart</button></div>
 </dialog>
 
 <dialog id="editD">
@@ -605,7 +617,34 @@ $("setupBtn").onclick = async () => {
   openTerminal("/ws/bridge/_setup", null, "Fleet setup");
 };
 
-refreshShips(); refreshStatic();
+// updates: Cadet checks its repo on GitHub; a tag appears when the default branch has moved ahead
+const short = (x) => (x || "").slice(0, 7);
+async function checkUpdate(force) {
+  let u; try { u = await api("GET", "/cadet/update" + (force ? "?force" : "")); } catch { return null; }
+  state.upd = u; $("updTag").hidden = !u.available; return u;
+}
+$("updTag").onclick = () => {
+  const u = state.upd; if (!u) return;
+  $("updSub").textContent = `${short(u.current)} → ${short(u.latest)} · ${u.behind} new ${u.behind === 1 ? "commit" : "commits"}`;
+  $("updList").innerHTML = u.notes.map((n) => `<li>${esc(n)}</li>`).join("") + (u.behind > u.notes.length ? `<li>…and ${u.behind - u.notes.length} more</li>` : "");
+  $("updMsg").textContent = u.canInstall ? "Cadet will download the update from GitHub and restart. Your sessions in Admiral are not affected." : "This copy of Cadet isn't running as the installed service. Run `git pull && cadet install` in its folder.";
+  $("updGo").disabled = !u.canInstall; $("updErr").textContent = ""; $("updD").showModal();
+};
+$("updCancel").onclick = () => $("updD").close();
+$("updGo").onclick = async () => {
+  const want = state.upd.latest;
+  $("updGo").disabled = true; $("updErr").textContent = "";
+  try { await api("POST", "/cadet/update"); } catch (x) { $("updErr").textContent = x.message; $("updGo").disabled = false; return; }
+  $("updMsg").textContent = "Restarting…";
+  for (let i = 0; i < 40; i++) {                       // wait for the new process, then load the new page
+    await new Promise((r) => setTimeout(r, 750));
+    try { const u = await api("GET", "/cadet/update?force"); if (u.current === want) return location.reload(); } catch {}
+  }
+  $("updErr").textContent = "Cadet didn't come back. Run `cadet status`, or `cadet install` to restart it.";
+};
+
+refreshShips(); refreshStatic(); checkUpdate();
+setInterval(checkUpdate, 30 * 60 * 1000);
 setInterval(refreshShips, 1500);
 setInterval(refreshStatic, 6000);
 </script>

@@ -21,6 +21,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -164,7 +165,7 @@ def check_update(force=False):
     if not force and _cache["value"] and time.time() - _cache["at"] < 600:
         return _cache["value"]
     cur = current_version()
-    out = {"available": False, "current": cur["sha"], "repo": cur["repo"], "canInstall": HERE == APP, "latest": None, "notes": [], "behind": 0}
+    out = {"available": False, "current": cur["sha"], "repo": cur["repo"], "canInstall": HERE.resolve() == APP.resolve(), "latest": None, "notes": [], "behind": 0}
     if cur["repo"] and cur["sha"]:
         try:
             latest = fetch_json(f"{GITHUB_API}/repos/{cur['repo']}/commits/HEAD")["sha"]
@@ -218,7 +219,10 @@ def apply_update():
         roots = list((work / "x").iterdir())
         if len(roots) != 1 or not (roots[0] / "cadet").is_file() or not (roots[0] / "web/index.html").is_file():
             raise ValueError("the download doesn't look like Cadet")
-        compile((roots[0] / "cadet").read_text(), "cadet", "exec")   # refuse an update that can't even start
+        try:
+            compile((roots[0] / "cadet").read_text(), "cadet", "exec")   # refuse an update that can't even start
+        except (SyntaxError, ValueError) as e:
+            raise ValueError(f"the new version doesn't compile: {e}")
         new = work / "app"
         new.mkdir()
         shutil.copy2(roots[0] / "cadet", new / "cadet")
@@ -261,6 +265,8 @@ async def cadet_api(reader, writer, method, path, query, headers):
             return await json_reply(writer, "200 OK", {"path": await add_checkout(body.get("fleet", ""), body.get("path", ""))})
     except (ValueError, json.JSONDecodeError, OSError, tarfile.TarError) as e:
         return await json_reply(writer, "400 Bad Request", {"error": str(e)})
+    except Exception as e:   # never leave the browser waiting on a crashed handler
+        return await json_reply(writer, "500 Internal Server Error", {"error": f"{type(e).__name__}: {e}"})
     await respond(writer, "404 Not Found", b'{"error":"not found"}', "application/json")
 
 
