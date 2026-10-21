@@ -3,7 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0e17">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Cadet">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Cadet</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b0e17'/%3E%3Cpath d='M16 5c4 4 5 9 4 15h-8c-1-6 0-11 4-15z' fill='%23e6e9f2'/%3E%3Ccircle cx='16' cy='13' r='2' fill='%234c8dff'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/vendor/xterm.css">
 <style>
@@ -17,7 +24,9 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+html { background: var(--bg); overscroll-behavior: none; }
 html, body { margin: 0; height: 100%; }
+button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); display: flex; flex-direction: column; -webkit-font-smoothing: antialiased; }
 #stars { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
 button, input, select, textarea { font: inherit; color: inherit; }
@@ -152,19 +161,82 @@ dialog::backdrop { background: rgba(4,6,12,.7); backdrop-filter: blur(2px); }
 #bridge .bh .m { color: var(--muted); font-size: 12px; flex: 1; }
 #term { flex: 1; min-height: 0; padding: 10px 8px 6px 14px; }
 
-@media (max-width: 860px) { main { grid-template-columns: 1fr; overflow: auto; } aside { border-right: 0; border-bottom: 1px solid var(--line); } .stage { min-height: 70vh; } }
+.btn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.inrow { display: flex; gap: 8px; align-items: center; }
+.inrow input { flex: 1; min-width: 0; }
+#rZt { margin-top: 14px; border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; background: var(--raised); }
+#rZt summary { cursor: pointer; font-weight: 550; font-size: 13px; }
+#rZt .hint { margin: 8px 0 0; font-size: 12px; }
+#rZt input { margin-bottom: 2px; }
+.rstat { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--raised); font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.rstat a { color: var(--accent); font-weight: 600; }
+.rstat.bad { color: var(--bad); border-color: rgba(240,86,106,.4); }
+.rstat .live { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--ok); }
+.rstat .url { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.rstat .url a { flex: 1; min-width: 0; }
+#keys { display: none; gap: 5px; padding: 8px 8px max(calc(env(safe-area-inset-bottom) - 8px), 8px); border-top: 1px solid var(--line); background: var(--surface); overflow-x: auto; }
+#keys button { flex: 1 1 0; min-width: 0; padding: 0; height: 38px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--raised); font-size: 13px; font-weight: 550; touch-action: manipulation; }
+#bridge.kb #keys { padding-bottom: 8px; }
+#keys button:active { background: var(--line-2); }
+@media (pointer: coarse) {
+  #term, #term * { touch-action: none !important; }
+  #term .xterm-viewport { overflow: hidden !important; }   /* xterm's native scroller steals touches now and then; we scroll it ourselves */
+}
+@media (pointer: coarse) { #keys { display: flex; } .row .acts { display: flex; } .rk .x { width: 28px; height: 28px; } }
+#tabs { display: none; }
+@media (max-width: 860px) {
+  /* the page itself never scrolls: header, one full-height view, tab bar. Only the Launch list and the terminal scroll. */
+  html, body { overflow: hidden; overscroll-behavior: none; }
+  body { position: fixed; top: 0; left: 0; right: 0; bottom: auto; height: var(--app-h, 100dvh); -webkit-text-size-adjust: 100%; -webkit-user-select: none; user-select: none; }
+  input, textarea, select, .tx, #term { -webkit-user-select: text; user-select: text; }
+  header { flex: none; height: calc(50px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) max(12px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left)); gap: 8px; }
+  .brand small, .btn .t, .pill.upd span { display: none; }
+  #conn span { display: none; }
+  #conn { padding: 0; width: 28px; height: 28px; justify-content: center; }
+  .pill.upd { padding: 0; width: 32px; height: 32px; justify-content: center; }
+  .btn { height: 36px; padding: 0 10px; }
+  .btn .dot { position: absolute; margin: -16px 0 0 14px; }
+  #remoteBtn, #logoutBtn { position: relative; }
+  main { display: block; position: relative; overflow: hidden; }
+  aside, .stage { position: absolute; inset: 0; }
+  body[data-view=fleet] aside, body[data-view=launch] .stage { display: none; }
+  aside { display: block; border: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding-bottom: 12px; }
+  .group.grow { flex: none; overflow: visible; }
+  .stage .head { left: 16px; top: 14px; }
+  .stage h2 { font-size: 18px; }
+  .group { padding: 14px 16px; }
+  .docks .btn { height: 40px; padding: 0 14px; }
+  .row { padding: 12px; }
+  .rk { width: 124px; }
+  .rk svg { width: 92px; height: 38px; }
+  .rk .ring { width: 92px; height: 92px; margin: -46px 0 0 -46px; top: 19px; }
+  .rk .nm { font-size: 12.5px; } .rk .meta, .rk .task, .rk .st { font-size: 11px; }
+  .add input, .db select, .db textarea, .db input, .inrow input { font-size: 16px; }
+  .df .btn, .inrow .btn { height: 40px; }
+  #tabs { display: flex; flex: none; position: relative; z-index: 3; border-top: 1px solid var(--line); background: rgba(11,14,23,.96); padding-bottom: max(calc(env(safe-area-inset-bottom) - 16px), 4px); }
+  #tabs button { flex: 1; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; height: 50px; border: 0; background: none; color: var(--faint); font-size: 11px; font-weight: 600; }
+  #tabs button.on { color: var(--accent); }
+  #tabs svg { width: 22px; height: 22px; }
+  #tabs .n { position: absolute; top: 7px; left: calc(50% + 8px); min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--warn); color: #000; font: 700 10px/16px var(--sans); text-align: center; font-style: normal; }
+  dialog { width: 100vw; max-width: none; margin: auto 0 0; max-height: 90dvh; border-radius: 16px 16px 0 0; border-bottom: 0; padding-bottom: env(safe-area-inset-bottom); }
+  #bridge { width: 100vw; border-left: 0; padding-top: env(safe-area-inset-top); overscroll-behavior: contain; }
+  #bridge .bh { padding: 8px 12px; }
+  #term { padding: 6px 4px 4px 8px; touch-action: none; overscroll-behavior: contain; }
+}
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } .rk { opacity: 1; } }
 </style>
 </head>
 <body>
 <canvas id="stars"></canvas>
 <header>
-  <div class="brand"><span class="mark"><svg class="i" viewBox="0 0 24 24"><path d="M12 3c3.5 3.2 4.6 7.5 3.6 13H8.4C7.4 10.5 8.5 6.2 12 3z"/><path d="M8.4 14 5 17.5M15.6 14l3.4 3.5"/></svg></span>Cadet <small>on Admiral</small></div>
+  <div class="brand" id="brandName"><span class="mark"><svg class="i" viewBox="0 0 24 24"><path d="M12 3c3.5 3.2 4.6 7.5 3.6 13H8.4C7.4 10.5 8.5 6.2 12 3z"/><path d="M8.4 14 5 17.5M15.6 14l3.4 3.5"/></svg></span>Cadet <small>on Admiral</small></div>
   <div class="spacer"></div>
   <button class="pill upd" id="updTag" hidden title="A newer version of Cadet is available"><svg class="i" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg><span>Update available</span></button>
   <span class="pill" id="attn" hidden></span>
   <span class="pill" id="conn"><i></i><span>Connecting</span></span>
-  <button class="btn" id="setupBtn"><svg class="i" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.6a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2 1.2l.4 2.6h4l.4-2.6a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg>Set up fleets</button>
+  <button class="btn" id="setupBtn"><svg class="i" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.6a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2 1.2l.4 2.6h4l.4-2.6a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg><span class="t">Set up fleets</span></button>
+  <button class="btn" id="remoteBtn" title="Open Cadet from your phone"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg><span class="t">Remote</span><i class="dot" id="remoteDot" hidden></i></button>
+  <button class="btn" id="logoutBtn" hidden title="Sign out of this device"><svg class="i" viewBox="0 0 24 24"><path d="M10 5H5v14h5M15 8l4 4-4 4M19 12H9"/></svg><span class="t">Sign out</span></button>
 </header>
 <main>
   <aside>
@@ -184,6 +256,11 @@ dialog::backdrop { background: rgba(4,6,12,.7); backdrop-filter: blur(2px); }
     <div class="void" id="void"><div><b>Quiet skies</b>Choose a fleet and harness on the left to launch a rocket.</div></div>
   </div>
 </main>
+
+<nav id="tabs" aria-label="Views">
+  <button data-view="fleet" class="on"><svg class="i" viewBox="0 0 24 24"><path d="M12 3c3.5 3.2 4.6 7.5 3.6 13H8.4C7.4 10.5 8.5 6.2 12 3z"/><circle cx="12" cy="10" r="1.6"/><path d="M8.4 14 5 17.5M15.6 14l3.4 3.5"/></svg>Fleet<i class="n" id="tabN" hidden></i></button>
+  <button data-view="launch"><svg class="i" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>Launch</button>
+</nav>
 
 <dialog id="launch">
   <div class="dh" id="lTitle">Launch<small id="lSub"></small></div>
@@ -212,6 +289,32 @@ dialog::backdrop { background: rgba(4,6,12,.7); backdrop-filter: blur(2px); }
   <div class="df"><span class="err" id="lErr"></span><button class="btn" id="lCancel" type="button">Cancel</button><button class="btn primary" id="lGo" type="button">Launch</button></div>
 </dialog>
 
+<dialog id="remoteD">
+  <div class="dh">Remote access<small>Open Cadet from your phone or any browser, behind a password. Nothing is reachable until you turn it on.</small></div>
+  <div class="db">
+    <p class="hint" id="rNo" hidden>This needs Cloudflare's free <b>cloudflared</b>. Install it with <code>brew install cloudflared</code>, then reopen this window.</p>
+    <label for="rPw" id="rPwL">Password</label>
+    <div class="inrow"><input id="rPw" type="password" placeholder="At least 10 characters" autocomplete="new-password"><button class="btn" id="rPwGo" type="button">Save</button></div>
+    <label for="rMode">Link</label>
+    <select id="rMode"><option value="quick">Quick link (random address)</option><option value="named">My own domain</option></select>
+    <div id="rNamed" hidden>
+      <label for="rDomain">Domain</label>
+      <input id="rDomain" placeholder="cadet.example.com" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="inrow" style="margin-top:8px"><span class="hint" id="rCf" style="flex:1"></span><button class="btn" id="rCfGo" type="button">Sign in to Cloudflare</button></div>
+      <p class="hint" style="margin:8px 0 0">The domain must be on the Cloudflare account you sign in with. Cadet creates the tunnel and the DNS record for you.</p>
+    </div>
+    <details id="rZt"><summary>Zero trust: require Cloudflare Access <span class="hint" id="rZtState"></span></summary>
+      <p class="hint">Cloudflare checks who is visiting (email code, Google, GitHub…) before anything reaches Cadet. Cadet verifies that check on every request, on top of the password. In <b>Cloudflare Zero Trust</b>, add a <i>Self-hosted</i> application for your domain with a policy that allows only you, then paste its details here. Needs your own domain.</p>
+      <label for="rZtTeam">Team domain</label><input id="rZtTeam" placeholder="yourteam.cloudflareaccess.com" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label for="rZtAud">Application Audience (AUD) tag</label><input id="rZtAud" placeholder="Long hex string" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="inrow" style="margin-top:8px;justify-content:flex-end"><button class="btn" id="rZtOff" type="button">Remove</button><button class="btn" id="rZtGo" type="button">Save</button></div>
+    </details>
+    <div id="rStat" class="rstat" hidden></div>
+    <p class="hint" id="rQuickNote" style="margin-top:12px">A quick link needs no Cloudflare account, but changes every time you turn it on. Use your own domain for an address that stays the same.</p>
+  </div>
+  <div class="df"><span class="err" id="rErr"></span><button class="btn" id="rClose" type="button">Close</button><button class="btn primary" id="rGo" type="button">Turn on</button></div>
+</dialog>
+
 <dialog id="updD">
   <div class="dh">Update Cadet<small id="updSub"></small></div>
   <div class="db"><div class="label" style="margin:12px 0 0">What's new</div><ul id="updList"></ul><p class="hint" id="updMsg"></p></div>
@@ -227,6 +330,9 @@ dialog::backdrop { background: rgba(4,6,12,.7); backdrop-filter: blur(2px); }
 <div id="bridge" aria-hidden="true">
   <div class="bh"><b id="bName"></b><span class="m" id="bState"></span><button class="btn" id="bClose">Close</button></div>
   <div id="term"></div>
+  <div id="keys" aria-label="Terminal keys">
+    <button data-k="&#27;">Esc</button><button data-k="&#9;">Tab</button><button data-k="&#3;" aria-label="Ctrl-C">^C</button><button data-k="&#27;[A" aria-label="Up">↑</button><button data-k="&#27;[B" aria-label="Down">↓</button><button data-k="&#27;[D" aria-label="Left">←</button><button data-k="&#27;[C" aria-label="Right">→</button><button data-scroll="-1" aria-label="Scroll up">⇞</button><button data-scroll="1" aria-label="Scroll down">⇟</button>
+  </div>
 </div>
 
 <script src="/vendor/xterm.js"></script>
@@ -243,6 +349,7 @@ const icon = (k) => `<svg class="i" viewBox="0 0 24 24">${ICON[k]}</svg>`;
 
 async function api(method, path, body) {
   const res = await fetch(path, { method, body: body ? JSON.stringify(body) : undefined });
+  if (res.status === 401) { location.href = "/login"; throw new Error("Signed out"); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
@@ -314,6 +421,7 @@ function renderShips() {
   $("sub").textContent = live.length ? `${live.length} ${live.length === 1 ? "rocket" : "rockets"} in flight · ${new Set(live.map((s) => s.fleet)).size} fleet(s)` : "";
   $("attn").hidden = !need; $("attn").textContent = `${need} need${need === 1 ? "s" : ""} you`; $("attn").classList.toggle("warn", !!need);
   document.title = need ? `(${need}) Cadet` : "Cadet";
+  $("tabN").hidden = !need; $("tabN").textContent = need;
   $("void").hidden = live.length > 0;
   const field = $("field"), keep = new Set(live.map((s) => s.session));
   for (const s of live) {
@@ -535,7 +643,7 @@ $("lGo").onclick = async () => {
   else if (!($("lText").value.trim())) { $("lErr").textContent = "Write an order first."; return; }
   else body.text = $("lText").value.trim();
   $("lGo").disabled = true;
-  try { await api("POST", "/api/ships", body); $("launch").close(); state.sel = null; refreshShips(); refreshStatic(); }
+  try { await api("POST", "/api/ships", body); $("launch").close(); state.sel = null; setView("fleet"); refreshShips(); refreshStatic(); }
   catch (x) { $("lErr").textContent = x.message; }
   $("lGo").disabled = false;
 };
@@ -617,6 +725,152 @@ $("setupBtn").onclick = async () => {
   openTerminal("/ws/bridge/_setup", null, "Fleet setup");
 };
 
+// phone: size the app to the visible window ourselves; iOS reports fixed/100% heights short of the screen in places
+const standalone = navigator.standalone === true;   // iOS home-screen app only; other platforms report the window correctly
+const setAppH = () => {
+  const portrait = innerHeight > innerWidth;
+  const h = standalone && portrait ? Math.max(innerHeight, screen.height) : innerHeight;   // iOS can report a short innerHeight in a home-screen app
+  document.documentElement.style.setProperty("--app-h", h + "px");
+};
+setAppH();
+["resize", "orientationchange", "pageshow"].forEach((ev) => addEventListener(ev, () => { setAppH(); setTimeout(setAppH, 250); }));
+
+// diagnostics for layout trouble on a phone: triple-tap the "Cadet" name (or a terminal's title) to show/hide
+const dbg = { scroll: "none" };
+(function debugPanel() {
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)";
+  document.body.appendChild(probe);
+  const box = document.createElement("pre");
+  box.style.cssText = "position:fixed;z-index:999;left:8px;right:8px;top:calc(env(safe-area-inset-top) + 8px);margin:0;padding:10px;border-radius:10px;background:rgba(0,0,0,.88);border:1px solid #4c8dff;color:#9fe;font:11px/1.35 ui-monospace,Menlo,monospace;white-space:pre-wrap;pointer-events:none;display:none";
+  document.body.appendChild(box);
+  let timer = null;
+  const text = () => {
+    const cs = getComputedStyle(probe), r = (id) => { const e = document.getElementById(id); return e ? JSON.stringify(e.getBoundingClientRect().toJSON(), (k, v) => typeof v === "number" ? Math.round(v) : v) : "-"; };
+    const vv = window.visualViewport, t = typeof term === "undefined" ? null : term;
+    return [`standalone ${standalone}  dpr ${devicePixelRatio}`, `inner ${innerWidth}x${innerHeight}  screen ${screen.width}x${screen.height}`,
+      `visual ${vv ? Math.round(vv.width) + "x" + Math.round(vv.height) + " top " + Math.round(vv.offsetTop) : "-"}`,
+      `inset t${cs.paddingTop} r${cs.paddingRight} b${cs.paddingBottom} l${cs.paddingLeft}`,
+      `--app-h ${document.documentElement.style.getPropertyValue("--app-h")}`, `body ${JSON.stringify(document.body.getBoundingClientRect().toJSON(), (k, v) => typeof v === "number" ? Math.round(v) : v)}`,
+      `tabs ${r("tabs")}`, t ? `term ${t.cols}x${t.rows} buf ${t.buffer.active.type} base ${t.buffer.active.baseY} y ${t.buffer.active.viewportY} mouse ${t.modes.mouseTrackingMode}` : "term -", `last scroll: ${dbg.scroll}`].join("\n");
+  };
+  const toggle = () => { const on = box.style.display === "none"; box.style.display = on ? "block" : "none"; clearInterval(timer); if (on) { box.textContent = text(); timer = setInterval(() => (box.textContent = text()), 500); } };
+  let taps = [];
+  for (const id of ["brandName", "bName"]) document.getElementById(id)?.addEventListener("click", () => { const n = Date.now(); taps = taps.filter((t) => n - t < 700).concat(n); if (taps.length >= 3) { taps = []; toggle(); } });
+})();
+
+// phone: one view at a time (Fleet or Launch)
+function setView(v) {
+  document.body.dataset.view = v;
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.view === v));
+  if (v === "fleet") window.dispatchEvent(new Event("resize"));
+}
+setView("fleet");
+$("tabs").addEventListener("click", (e) => { const b = e.target.closest("[data-view]"); if (b) setView(b.dataset.view); });
+
+// terminal on touch: a drag is a mouse wheel. Apps that take the mouse (or full-screen apps) get wheel events like on the desktop; otherwise we scroll xterm's own history.
+function wheelTerm(lines) {
+  const el = term.element, r = el.getBoundingClientRect();
+  const ev = { deltaY: lines * 20, deltaMode: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true };
+  const live = term.modes.mouseTrackingMode !== "none" || term.buffer.active.type === "alternate";
+  dbg.scroll = `${live ? "wheel to app" : "history"} ${lines} (mouse ${term.modes.mouseTrackingMode}, ${term.buffer.active.type}, base ${term.buffer.active.baseY})`;
+  if (live) el.dispatchEvent(new WheelEvent("wheel", ev)); else term.scrollLines(lines);
+}
+(function touchScroll() {
+  let y0 = null, acc = 0;
+  const line = () => (term ? Math.max(12, term.options.fontSize * 1.25) : 16);
+  const el = $("term");
+  el.addEventListener("touchstart", (e) => { y0 = e.touches[0].clientY; acc = 0; }, { passive: true });
+  el.addEventListener("touchmove", (e) => {
+    if (!term || y0 === null) return;
+    const y = e.touches[0].clientY; acc += y0 - y; y0 = y;
+    const n = Math.trunc(acc / line());
+    if (n) { wheelTerm(n); acc -= n * line(); }
+    e.preventDefault();
+  }, { passive: false });
+  el.addEventListener("touchend", () => (y0 = null), { passive: true });
+})();
+$("keys").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-scroll]"); if (!b || !term) return;
+  const d = +b.dataset.scroll;
+  if (term.modes.mouseTrackingMode !== "none") wheelTerm(d * Math.max(5, term.rows - 3));
+  else if (term.buffer.active.type === "alternate") ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: "input", data: d < 0 ? "\x1b[5~" : "\x1b[6~" }));
+  else term.scrollPages(d);
+});
+
+// phone: on the tunnel there is no Remote setup (it is Mac-only), only a way to sign out
+const REMOTE = !["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+$("remoteBtn").hidden = REMOTE; $("logoutBtn").hidden = !REMOTE;
+$("logoutBtn").onclick = async () => { await fetch("/auth/logout", { method: "POST" }).catch(() => {}); location.href = "/login"; };
+$("keys").addEventListener("pointerdown", (e) => {
+  const b = e.target.closest("[data-k], [data-scroll]"); if (!b) return;
+  if (!b.dataset.k) return e.preventDefault();
+  e.preventDefault();                                   // keep the soft keyboard up
+  ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: "input", data: b.dataset.k }));
+});
+if (window.visualViewport) {                            // the on-screen keyboard shrinks the terminal instead of covering it
+  const fitBridge = () => {
+    const b = $("bridge"), v = visualViewport;
+    const kb = v.height < innerHeight - 40;
+    b.style.height = kb ? v.height + "px" : ""; b.style.top = kb ? v.offsetTop + "px" : ""; b.classList.toggle("kb", kb);
+    fit && fit.fit();
+  };
+  visualViewport.addEventListener("resize", fitBridge); visualViewport.addEventListener("scroll", fitBridge);
+}
+
+// remote access: password, then a tunnel (quick link or own domain) that Cloudflare carries to this Mac
+let rs = null, rTimer = null;
+function renderRemote() {
+  const r = rs; if (!r) return;
+  $("rNo").hidden = r.installed;
+  $("rPwL").textContent = r.hasPassword ? "Change password" : "Password";
+  $("rPw").placeholder = r.hasPassword ? "New password (at least 10 characters)" : "At least 10 characters";
+  const named = $("rMode").value === "named";
+  $("rNamed").hidden = !named; $("rQuickNote").hidden = named;
+  $("rCf").textContent = r.loggedIn ? "Signed in to Cloudflare" : r.loggingIn ? "Finish in your browser…" : "Not signed in to Cloudflare yet";
+  $("rCfGo").hidden = r.loggedIn; $("rCfGo").disabled = r.loggingIn || !r.installed;
+  const on = r.running || r.enabled;
+  const st = $("rStat"); st.className = "rstat"; st.hidden = false;
+  if (r.error) { st.classList.add("bad"); st.textContent = r.error; }
+  else if (r.ready && r.url) st.innerHTML = `<span class="live"></span>Live. Open this on your phone:<div class="url"><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a><button class="btn" id="rCopy" type="button">Copy</button></div>`;
+  else if (r.running || r.step) st.textContent = (r.step || "Connecting") + "…";
+  else if (r.loginUrl && !r.loggedIn) st.innerHTML = `Cloudflare should have opened in your browser. If not, <a href="${esc(r.loginUrl)}" target="_blank" rel="noopener">open the sign-in page</a>.`;
+  else st.hidden = true;
+  $("rZtState").textContent = r.access ? "· on" : "";
+  if (r.access && !$("rZtTeam").value) { $("rZtTeam").value = r.access.team; $("rZtAud").value = r.access.aud; }
+  $("rGo").textContent = on ? "Turn off" : "Turn on";
+  $("rGo").disabled = !r.installed || (!on && !r.hasPassword);
+  $("remoteDot").hidden = !r.ready;
+}
+async function loadRemote() { try { rs = await api("GET", "/cadet/remote"); renderRemote(); } catch {} }
+async function postRemote(path, body) {
+  $("rErr").textContent = "";
+  try { rs = await api("POST", "/cadet/remote/" + path, body || {}); renderRemote(); return true; }
+  catch (x) { $("rErr").textContent = x.message; return false; }
+}
+$("remoteBtn").onclick = async () => {
+  await loadRemote(); if (!rs) return;
+  $("rMode").value = rs.mode; $("rDomain").value = rs.domain; $("rPw").value = ""; $("rErr").textContent = "";
+  renderRemote(); $("remoteD").showModal();
+  rTimer = setInterval(loadRemote, 1500);
+};
+$("remoteD").addEventListener("close", () => clearInterval(rTimer));
+$("rClose").onclick = () => $("remoteD").close();
+$("rMode").onchange = renderRemote;
+$("rPwGo").onclick = async () => { if (await postRemote("password", { password: $("rPw").value })) { $("rPw").value = ""; $("rErr").textContent = "Password saved."; } };
+$("rCfGo").onclick = () => postRemote("login");
+$("rZtGo").onclick = async () => { if (await postRemote("access", { team: $("rZtTeam").value, aud: $("rZtAud").value })) $("rErr").textContent = "Cloudflare Access is required."; };
+$("rZtOff").onclick = async () => { $("rZtTeam").value = $("rZtAud").value = ""; if (await postRemote("access", {})) $("rErr").textContent = "Cloudflare Access is no longer required."; };
+$("rGo").onclick = async () => {
+  if (rs.running || rs.enabled) return postRemote("stop");
+  if ($("rPw").value && !(await postRemote("password", { password: $("rPw").value }))) return;
+  $("rPw").value = "";
+  postRemote("start", { mode: $("rMode").value, domain: $("rDomain").value });
+};
+$("remoteD").addEventListener("click", (e) => {
+  if (e.target.id === "rCopy") navigator.clipboard.writeText(rs.url).then(() => { e.target.textContent = "Copied"; setTimeout(() => (e.target.textContent = "Copy"), 1500); });
+});
+
 // updates: Cadet checks its repo on GitHub; a tag appears when the default branch has moved ahead
 const short = (x) => (x || "").slice(0, 7);
 async function checkUpdate(force) {
@@ -643,7 +897,7 @@ $("updGo").onclick = async () => {
   $("updErr").textContent = "Cadet didn't come back. Run `cadet status`, or `cadet install` to restart it.";
 };
 
-refreshShips(); refreshStatic(); checkUpdate();
+refreshShips(); refreshStatic(); checkUpdate(); if (!REMOTE) loadRemote();
 setInterval(checkUpdate, 30 * 60 * 1000);
 setInterval(refreshShips, 1500);
 setInterval(refreshStatic, 6000);

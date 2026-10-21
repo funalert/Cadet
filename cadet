@@ -9,12 +9,17 @@ sees one origin. Standard library only.
   cadet uninstall   stop it and remove the LaunchAgent
   cadet status      say whether the background service is running
   cadet open        open Cadet in your browser
+
+Remote access (phone, other computers) is set up from the Remote button in the app.
 """
 import asyncio
+import hashlib
+import hmac
 import json
 import mimetypes
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -23,14 +28,20 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections import deque
+from functools import partial
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 HERE = Path(os.path.realpath(__file__)).parent
 WEB = HERE / "web"
 APP = Path.home() / ".cadet/app"
 LABEL = "dev.cadet"
 PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
+REMOTE_FILE = APP.parent / "remote.json"
+CF_PID = APP.parent / "cloudflared.pid"
+CF_CONFIG = APP.parent / "cloudflared.yml"
+CF_CERT = Path.home() / ".cloudflared/cert.pem"
 
 
 def env(name, default):
@@ -41,6 +52,7 @@ GITHUB_API = env("CADET_GITHUB_API", "https://api.github.com")
 GITHUB_DL = env("CADET_GITHUB_DL", "https://codeload.github.com")
 ADMIRAL = env("CADET_ADMIRAL", "127.0.0.1:7420")
 LISTEN = env("CADET_LISTEN", "127.0.0.1:7421")
+REMOTE_LISTEN = env("CADET_REMOTE_LISTEN", "127.0.0.1:7422")   # only the tunnel connects here; always asks for the password
 
 
 def split(addr):
@@ -59,8 +71,9 @@ async def pipe(reader, writer):
         writer.close()
 
 
-async def respond(writer, status, body=b"", ctype="text/plain; charset=utf-8"):
-    head = f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+async def respond(writer, status, body=b"", ctype="text/plain; charset=utf-8", extra=""):
+    head = (f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\nCache-Control: no-cache\r\n"
+            f"X-Content-Type-Options: nosniff\r\nContent-Security-Policy: frame-ancestors 'none'\r\n{extra}Connection: close\r\n\r\n")
     writer.write(head.encode() + body)
     await writer.drain()
     writer.close()
@@ -81,14 +94,19 @@ def trusted(headers):
     return origin is None or origin == f"http://{host}"
 
 
-def json_reply(writer, status, obj):
-    return respond(writer, status, json.dumps(obj).encode(), "application/json")
+def json_reply(writer, status, obj, extra=""):
+    return respond(writer, status, json.dumps(obj).encode(), "application/json", extra)
+
+
+def find_bin(name):
+    # launchd's PATH is minimal, so look in the usual install places too
+    for p in (shutil.which(name), f"/opt/homebrew/bin/{name}", f"/usr/local/bin/{name}", str(Path.home() / f".local/bin/{name}")):
+        if p and os.access(p, os.X_OK):
+            return p
 
 
 def admiral_bin():
-    for p in (shutil.which("admiral"), "/opt/homebrew/bin/admiral", "/usr/local/bin/admiral", str(Path.home() / ".local/bin/admiral")):
-        if p and os.access(p, os.X_OK):
-            return p
+    return find_bin("admiral")
 
 
 def list_dirs(raw):
@@ -243,11 +261,392 @@ def apply_update():
 
 
 def restart():
+    if T.proc and T.proc.returncode is None:
+        T.proc.terminate()   # the new process starts its own
     os.execv(sys.executable, [sys.executable, str(APP / "cadet")])
+
+
+# ---- remote access: a password-protected second listener that a Cloudflare tunnel points at
+def remote_load():
+    try:
+        return json.loads(REMOTE_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def remote_save(cfg):
+    REMOTE_FILE.parent.mkdir(exist_ok=True)
+    fd = os.open(REMOTE_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(cfg, f)
+
+
+def stretch(password, salt):
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000)
+
+
+def set_password(password):
+    if len(password) < 10:
+        raise ValueError("Use at least 10 characters. This password protects a terminal on your Mac.")
+    cfg = remote_load()
+    salt = secrets.token_bytes(16)
+    cfg.update(salt=salt.hex(), hash=stretch(password, salt).hex(), secret=secrets.token_hex(32))   # new secret signs everyone out
+    remote_save(cfg)
+
+
+def check_password(password):
+    cfg = remote_load()
+    if not cfg.get("hash"):
+        return False
+    return hmac.compare_digest(stretch(password, bytes.fromhex(cfg["salt"])).hex(), cfg["hash"])
+
+
+SESSION_DAYS = 30
+
+
+def sign(cfg, exp):
+    return hmac.new(bytes.fromhex(cfg["secret"]), str(exp).encode(), "sha256").hexdigest()
+
+
+def new_session(cfg):
+    exp = int(time.time()) + SESSION_DAYS * 86400
+    return f"{exp}.{sign(cfg, exp)}"
+
+
+def cookie_value(headers, name):
+    for part in headers.get("cookie", "").split(";"):
+        k, _, v = part.strip().partition("=")
+        if k == name:
+            return v
+
+
+def valid_session(cfg, headers):
+    exp, _, sig = (cookie_value(headers, "cadet_session") or "").partition(".")
+    if not (cfg.get("secret") and exp.isdigit() and int(exp) > time.time()):
+        return False
+    return hmac.compare_digest(sig, sign(cfg, exp))
+
+
+_fails = {}
+
+
+def throttled(key, limit):
+    recent = _fails[key] = [t for t in _fails.get(key, []) if time.time() - t < 300]
+    return len(recent) >= limit
+
+
+def session_cookie(headers, value, age):
+    secure = "" if loopback(headers.get("host", "").rpartition(":")[0]) else "; Secure"   # the tunnel is always https
+    return f"Set-Cookie: cadet_session={value}; Max-Age={age}; Path=/; HttpOnly; SameSite=Strict{secure}\r\n"
+
+
+async def read_json(reader, headers, limit=65536):
+    n = int(headers.get("content-length", "0"))
+    if n > limit:
+        raise ValueError("request too large")
+    return json.loads(await reader.readexactly(n) or b"{}")
+
+
+async def login(reader, writer, headers):
+    ip = headers.get("cf-connecting-ip", "-")
+    if throttled(ip, 5) or throttled("*", 40):
+        return await json_reply(writer, "429 Too Many Requests", {"error": "Too many attempts. Wait a few minutes."})
+    try:
+        body = await read_json(reader, headers, 4096)
+    except (ValueError, json.JSONDecodeError):
+        return await json_reply(writer, "400 Bad Request", {"error": "bad request"})
+    if not await asyncio.to_thread(check_password, str(body.get("password", ""))):
+        _fails.setdefault(ip, []).append(time.time())
+        _fails.setdefault("*", []).append(time.time())
+        await asyncio.sleep(1)
+        return await json_reply(writer, "401 Unauthorized", {"error": "Wrong password"})
+    await json_reply(writer, "200 OK", {"ok": True}, session_cookie(headers, new_session(remote_load()), SESSION_DAYS * 86400))
+
+
+# zero trust: with Cloudflare Access in front, every request must carry Access's signed identity token
+_jwks = {"at": 0.0, "keys": {}}
+
+
+def b64u(s):
+    import base64
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def access_keys(team):
+    if time.time() - _jwks["at"] > 3600 or _jwks.get("team") != team:
+        with urllib.request.urlopen(f"https://{team}/cdn-cgi/access/certs", timeout=10) as r:
+            keys = json.load(r)["keys"]
+        _jwks.update(at=time.time(), team=team, keys={k["kid"]: k for k in keys})
+    return _jwks["keys"]
+
+
+SHA256_PREFIX = bytes.fromhex("3031300d060960864801650304020105000420")
+
+
+def access_ok(cfg, headers):
+    """Check Cf-Access-Jwt-Assertion: RS256 signature from the team's keys, our app's audience, not expired."""
+    acc = cfg.get("access")
+    if not acc:
+        return True
+    try:
+        head, body, sig = headers.get("cf-access-jwt-assertion", "").split(".")
+        h, claims = json.loads(b64u(head)), json.loads(b64u(body))
+        if h.get("alg") != "RS256":
+            return False
+        key = access_keys(acc["team"]).get(h.get("kid"))
+        if not key:
+            return False
+        n, e = int.from_bytes(b64u(key["n"]), "big"), int.from_bytes(b64u(key["e"]), "big")
+        k = (n.bit_length() + 7) // 8
+        em = pow(int.from_bytes(b64u(sig), "big"), e, n).to_bytes(k, "big")
+        want = b"\x00\x01" + b"\xff" * (k - 3 - len(SHA256_PREFIX) - 32) + b"\x00" + SHA256_PREFIX + hashlib.sha256(f"{head}.{body}".encode()).digest()
+        aud = claims.get("aud")
+        return (hmac.compare_digest(em, want) and claims.get("iss") == f"https://{acc['team']}" and claims.get("exp", 0) > time.time()
+                and acc["aud"] in ([aud] if isinstance(aud, str) else aud or []))
+    except (ValueError, KeyError, TypeError, OSError):
+        return False
+
+
+# what a phone needs before it has signed in
+PUBLIC = {"/login": "login.html", "/manifest.webmanifest": "manifest.webmanifest", "/icon-192.png": "icon-192.png",
+          "/icon-512.png": "icon-512.png", "/apple-touch-icon.png": "apple-touch-icon.png"}
+
+
+async def remote_gate(reader, writer, method, path, headers):
+    """True when the request may continue to the normal handlers."""
+    cfg = remote_load()
+    if not cfg.get("hash"):
+        await respond(writer, "503 Service Unavailable", b"Remote access isn't set up on this Mac.")
+        return False
+    if not await asyncio.to_thread(access_ok, cfg, headers):
+        await respond(writer, "403 Forbidden", b"Sign in with Cloudflare Access to reach Cadet.")
+        return False
+    origin = headers.get("origin")
+    if origin and urlparse(origin).netloc != headers.get("host", ""):
+        await respond(writer, "403 Forbidden", b"forbidden")
+        return False
+    if path.startswith("/cadet/remote"):   # the tunnel and password are only changed from the Mac itself
+        await respond(writer, "403 Forbidden", b"forbidden")
+        return False
+    if method == "POST" and path == "/auth/login":
+        await login(reader, writer, headers)
+        return False
+    if method == "POST" and path == "/auth/logout":
+        await json_reply(writer, "200 OK", {"ok": True}, session_cookie(headers, "", 0))
+        return False
+    if method in ("GET", "HEAD") and path in PUBLIC:
+        if path == "/login" and valid_session(cfg, headers):
+            await respond(writer, "302 Found", extra="Location: /\r\n")
+        else:
+            await serve_file(writer, PUBLIC[path])
+        return False
+    if valid_session(cfg, headers):
+        return True
+    if method == "GET" and "text/html" in headers.get("accept", ""):
+        await respond(writer, "302 Found", extra="Location: /login\r\n")
+    else:
+        await json_reply(writer, "401 Unauthorized", {"error": "sign in required"})
+    return False
+
+
+class Tunnel:
+    proc = None          # the running cloudflared
+    login_proc = None    # `cloudflared tunnel login`, while the browser sign-in is open
+    login_url = None
+    url = None
+    ready = False
+    step = None
+    error = None
+    task = None
+    log = deque(maxlen=60)
+
+
+T = Tunnel()
+
+
+def tunnel_list(out):
+    start = min((i for i in (out.find("["), out.find("null")) if i >= 0), default=-1)   # tolerate a log line before the JSON
+    found = json.JSONDecoder().raw_decode(out[start:])[0] if start >= 0 else None
+    return [t for t in found or [] if t.get("id")]
+
+
+async def run_cf(*args, timeout=90):
+    """(exit code, stdout, stderr): kept apart because cloudflared logs warnings on stderr, and stdout may be JSON."""
+    proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise ValueError("cloudflared did not answer")
+    return proc.returncode, out.decode(errors="replace").strip(), err.decode(errors="replace").strip()
+
+
+def kill_stale():
+    """A cloudflared left behind by a previous Cadet process (crash, or launchd stopping us) would hold the tunnel open."""
+    try:
+        pid = int(CF_PID.read_text())
+        if "cloudflared" in subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True).stdout:
+            os.kill(pid, 15)
+    except (OSError, ValueError):
+        pass
+    CF_PID.unlink(missing_ok=True)
+
+
+async def tunnel_stop():
+    proc, T.proc = T.proc, None
+    T.url = T.step = None
+    T.ready = False
+    if proc and proc.returncode is None:
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), 5)
+        except asyncio.TimeoutError:
+            proc.kill()
+    CF_PID.unlink(missing_ok=True)
+
+
+async def tunnel_watch(proc, quick):
+    async for raw in proc.stdout:
+        line = raw.decode(errors="replace").rstrip()
+        T.log.append(line)
+        if quick and (m := re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)):
+            T.url = m.group(0)
+        if "Registered tunnel connection" in line:
+            T.ready = True
+            T.step = None
+    await proc.wait()
+    if T.proc is proc:   # it ended on its own, not because we stopped it
+        T.proc, T.ready = None, False
+        T.error = "The tunnel stopped. " + (T.log[-1] if T.log else "")
+
+
+async def tunnel_start():
+    cfg = remote_load()
+    try:
+        cf = find_bin("cloudflared")
+        if not cf:
+            raise ValueError("Install cloudflared first: brew install cloudflared")
+        if not cfg.get("hash"):
+            raise ValueError("Set a password first")
+        await tunnel_stop()
+        T.error, T.log = None, deque(maxlen=60)
+        target = f"http://{REMOTE_LISTEN}"
+        quick = cfg.get("mode") != "named"
+        if quick:
+            args = [cf, "tunnel", "--no-autoupdate", "--url", target]
+        else:
+            domain, name = cfg.get("domain", ""), cfg.get("tunnel", "cadet")
+            if not CF_CERT.exists():
+                raise ValueError("Sign in to Cloudflare first")
+            T.step = "Setting up the tunnel"
+            rc, out, err = await run_cf(cf, "tunnel", "list", "--name", name, "-o", "json")
+            if rc != 0:
+                raise ValueError(err or out or "cloudflared could not list tunnels")
+            tunnels = tunnel_list(out)
+            if not tunnels:
+                rc, out, err = await run_cf(cf, "tunnel", "create", name)
+                if rc != 0:
+                    raise ValueError(err or out)
+                rc, out, err = await run_cf(cf, "tunnel", "list", "--name", name, "-o", "json")
+                tunnels = tunnel_list(out)
+            if not tunnels:
+                raise ValueError("The tunnel was created but cloudflared cannot find it")
+            creds = Path.home() / ".cloudflared" / f"{tunnels[0]['id']}.json"
+            # our own config, so a ~/.cloudflared/config.yml from another tunnel (with its own ingress rules) can't hijack ours
+            CF_CONFIG.write_text(f"tunnel: {tunnels[0]['id']}\ncredentials-file: {creds}\ningress:\n  - hostname: {domain}\n    service: {target}\n  - service: http_status:404\n")
+            T.step = f"Pointing {domain} at the tunnel"
+            # by id and under our config: a name would be resolved through ~/.cloudflared/config.yml, which may name another tunnel
+            rc, out, err = await run_cf(cf, "tunnel", "--config", str(CF_CONFIG), "route", "dns", "--overwrite-dns", tunnels[0]["id"], domain)
+            if rc != 0:
+                raise ValueError(err or out)
+            args = [cf, "tunnel", "--config", str(CF_CONFIG), "--no-autoupdate", "run", tunnels[0]["id"]]
+            T.url = f"https://{domain}"
+        T.step = "Connecting"
+        proc = T.proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        CF_PID.write_text(str(proc.pid))
+        asyncio.create_task(tunnel_watch(proc, quick))
+    except (ValueError, OSError, json.JSONDecodeError) as e:
+        T.error, T.step = str(e), None
+
+
+async def cloudflare_login():
+    """`cloudflared tunnel login` opens the browser; it writes cert.pem and exits once the user picks a domain."""
+    if T.login_proc and T.login_proc.returncode is None:
+        return
+    cf = find_bin("cloudflared")
+    if not cf:
+        raise ValueError("Install cloudflared first: brew install cloudflared")
+    T.login_url = None
+    proc = T.login_proc = await asyncio.create_subprocess_exec(cf, "tunnel", "login", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+
+    async def watch():
+        async for raw in proc.stdout:
+            if m := re.search(r"https://dash\.cloudflare\.com\S+", raw.decode(errors="replace")):
+                T.login_url = m.group(0)
+        await proc.wait()
+        T.login_url = None
+    asyncio.create_task(watch())
+    asyncio.get_running_loop().call_later(600, lambda: proc.returncode is None and proc.kill())
+
+
+def remote_status():
+    cfg = remote_load()
+    return {"installed": bool(find_bin("cloudflared")), "hasPassword": bool(cfg.get("hash")), "mode": cfg.get("mode", "quick"),
+            "domain": cfg.get("domain", ""), "access": cfg.get("access"), "enabled": bool(cfg.get("enabled")), "running": bool(T.proc), "ready": T.ready,
+            "url": T.url, "step": T.step, "error": T.error, "loggedIn": CF_CERT.exists(), "loginUrl": T.login_url,
+            "loggingIn": bool(T.login_proc and T.login_proc.returncode is None), "log": list(T.log)[-6:]}
+
+
+async def remote_api(reader, writer, method, path, headers):
+    if method == "GET" and path == "/cadet/remote":
+        return await json_reply(writer, "200 OK", remote_status())
+    if method != "POST":
+        raise LookupError
+    body = await read_json(reader, headers)
+    if path == "/cadet/remote/password":
+        await asyncio.to_thread(set_password, str(body.get("password", "")))
+    elif path == "/cadet/remote/access":
+        team, aud = str(body.get("team", "")).strip().lower().removeprefix("https://").rstrip("/"), str(body.get("aud", "")).strip()
+        cfg = remote_load()
+        if not team and not aud:
+            cfg.pop("access", None)
+        else:
+            if not re.fullmatch(r"[a-z0-9-]+\.cloudflareaccess\.com", team):
+                raise ValueError("Team domain looks like yourteam.cloudflareaccess.com")
+            if not re.fullmatch(r"[0-9a-f]{32,}", aud):
+                raise ValueError("The Application Audience (AUD) tag is a long hex string from your Access application")
+            await asyncio.to_thread(access_keys, team)   # fail now, not at the first request, if the team can't be reached
+            cfg["access"] = {"team": team, "aud": aud}
+        remote_save(cfg)
+    elif path == "/cadet/remote/login":
+        await cloudflare_login()
+    elif path == "/cadet/remote/start":
+        mode, domain = body.get("mode"), str(body.get("domain", "")).strip().lower()
+        if mode not in ("quick", "named"):
+            raise ValueError("Choose a quick link or your own domain")
+        if mode == "named" and not re.fullmatch(r"([a-z0-9-]+\.)+[a-z]{2,}", domain):
+            raise ValueError("Enter a full domain like cadet.example.com")
+        if not remote_load().get("hash"):
+            raise ValueError("Set a password first")
+        cfg = remote_load()
+        cfg.update(mode=mode, domain=domain, enabled=True)
+        remote_save(cfg)
+        T.task = asyncio.create_task(tunnel_start())
+    elif path == "/cadet/remote/stop":
+        cfg = remote_load()
+        cfg["enabled"] = False
+        remote_save(cfg)
+        await tunnel_stop()
+        T.error = None
+    else:
+        raise LookupError
+    await json_reply(writer, "200 OK", remote_status())
 
 
 async def cadet_api(reader, writer, method, path, query, headers):
     try:
+        if path.startswith("/cadet/remote"):
+            return await remote_api(reader, writer, method, path, headers)
         if method == "GET" and path == "/cadet/fs":
             return await json_reply(writer, "200 OK", list_dirs(query.get("path", [""])[0]))
         if method == "GET" and path == "/cadet/update":
@@ -263,6 +662,8 @@ async def cadet_api(reader, writer, method, path, query, headers):
                 raise ValueError("request too large")
             body = json.loads(await reader.readexactly(n) or b"{}")
             return await json_reply(writer, "200 OK", {"path": await add_checkout(body.get("fleet", ""), body.get("path", ""))})
+    except LookupError:
+        pass
     except (ValueError, json.JSONDecodeError, OSError, tarfile.TarError) as e:
         return await json_reply(writer, "400 Bad Request", {"error": str(e)})
     except Exception as e:   # never leave the browser waiting on a crashed handler
@@ -270,7 +671,15 @@ async def cadet_api(reader, writer, method, path, query, headers):
     await respond(writer, "404 Not Found", b'{"error":"not found"}', "application/json")
 
 
-async def handle(reader, writer):
+async def serve_file(writer, rel):
+    file = (WEB / rel).resolve()
+    if WEB.resolve() not in file.parents or not file.is_file():
+        return await respond(writer, "404 Not Found", b"not found")
+    ctype = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+    await respond(writer, "200 OK", file.read_bytes(), ctype)
+
+
+async def handle(reader, writer, remote=False):
     try:
         raw = await reader.readuntil(b"\r\n\r\n")
     except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError):
@@ -281,7 +690,10 @@ async def handle(reader, writer):
     path, _, qs = target.partition("?")
     headers = {k.strip().lower(): v.strip() for k, _, v in (l.partition(":") for l in lines[1:])}
 
-    if not trusted(headers):
+    if remote:
+        if not await remote_gate(reader, writer, method, path, headers):
+            return
+    elif not trusted(headers):
         await respond(writer, "403 Forbidden", b"forbidden")
         return
     if path.startswith("/cadet/"):
@@ -293,13 +705,7 @@ async def handle(reader, writer):
     if method not in ("GET", "HEAD"):
         await respond(writer, "405 Method Not Allowed")
         return
-    rel = "index.html" if path == "/" else path.lstrip("/")
-    file = (WEB / rel).resolve()
-    if WEB.resolve() not in file.parents or not file.is_file():
-        await respond(writer, "404 Not Found", b"not found")
-        return
-    ctype = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
-    await respond(writer, "200 OK", file.read_bytes(), ctype)
+    await serve_file(writer, "index.html" if path == "/" else path.lstrip("/"))
 
 
 async def proxy(reader, writer, lines):
@@ -319,6 +725,8 @@ async def proxy(reader, writer, lines):
             line = f"Host: {ADMIRAL}"
         elif key == "origin":
             line = f"Origin: http://{ADMIRAL}"
+        elif key == "cookie":
+            line = "Cookie: " + "; ".join(c for c in value.split(";") if not c.strip().startswith("cadet_session="))
         elif key == "connection" and "upgrade" in value.lower():
             upgrade = True
         elif key == "connection":
@@ -335,6 +743,15 @@ async def serve():
     host, port = split(LISTEN)
     server = await asyncio.start_server(handle, host, port)
     print(f"Cadet is flying at http://{LISTEN}/  (Admiral at {ADMIRAL})", flush=True)
+    rhost, rport = split(REMOTE_LISTEN)
+    try:
+        remote = await asyncio.start_server(partial(handle, remote=True), rhost, rport)
+    except OSError as e:
+        remote = None
+        print(f"Remote access is unavailable: {e}", flush=True)
+    kill_stale()
+    if remote and remote_load().get("enabled"):
+        T.task = asyncio.create_task(tunnel_start())
     async with server:
         await server.serve_forever()
 
