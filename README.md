@@ -4,7 +4,6 @@ A space-themed screen for [Admiral](https://github.com/jbuffin/admiral).
 
 Your coding agents show up as rockets flying through space. Click one to see what it's doing.
 
-> Cadet is an independent project. It is not made by or endorsed by Admiral's authors.
 
 ## Install
 
