@@ -33,6 +33,7 @@ Cadet now runs in the background and starts by itself when you log in.
 - **Watch your agents:** each one is a rocket. An amber ring means it needs you.
 - **Open its terminal:** click a rocket.
 - **Rearrange:** drag rockets anywhere you like.
+- **Chat with AdmiralBot:** press the yellow chat button (or the **Chat** tab on your phone) to talk to Admiral's own assistant, answer its questions with a tap, start a new chat, open its terminal, or change its model.
 - **Add things on the fly:** new order sources and new folders, right from the launch window.
 
 ## Use it from your phone
